@@ -8,6 +8,33 @@ A tiny Rust package manager driven by a web-hosted JSON index.
 cargo build --release
 ```
 
+## Hosting on GitHub
+
+The CLI and the emerge extension fetch the index from GitHub raw by default:
+
+```
+https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/packages.json
+```
+
+To publish (from the repo root):
+
+```bash
+gh repo create Arthur4567321/Ark --public --source=. --push   # or create it on github.com and:
+# git remote add origin git@github.com:Arthur4567321/Ark.git
+# git push -u origin main
+```
+
+Once pushed, anyone can install packages with no local server running — the
+`emerge` extension itself is installed the same way (`ark install emerge`
+downloads it from the same repo). Override the index location anytime with:
+
+```bash
+ARK_INDEX_URL=http://localhost:8000/packages.json ark list   # local testing
+```
+
+Note: `raw.githubusercontent.com` caches files for ~5 minutes — newly pushed
+index changes may take a few minutes to appear.
+
 ## Repository web page
 
 The `web/` directory is the package repository:

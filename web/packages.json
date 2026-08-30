@@ -53,7 +53,7 @@
     "description": "Gentoo-style USE flags with Debian-grade safety: an ark extension.",
     "installed": false,
     "path": "~/.ark/extensions/ark-emerge",
-    "installation_command": "mkdir -p ~/.ark/extensions && curl -fsSL http://localhost:8000/extensions/ark-emerge -o ~/.ark/extensions/ark-emerge && chmod +x ~/.ark/extensions/ark-emerge"
+    "installation_command": "mkdir -p ~/.ark/extensions && curl -fsSL https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/extensions/ark-emerge -o ~/.ark/extensions/ark-emerge && chmod +x ~/.ark/extensions/ark-emerge"
   },
   {
     "name": "hello-gentoo",

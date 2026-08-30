@@ -5,8 +5,13 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-// Web-hosted package index (serve web/ with: python3 -m http.server 8000)
-const INDEX_URL: &str = "http://localhost:8000/packages.json";
+// Package index hosted on GitHub (override with the ARK_INDEX_URL env var)
+const INDEX_URL: &str =
+    "https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/packages.json";
+
+fn index_url() -> String {
+    std::env::var("ARK_INDEX_URL").unwrap_or_else(|_| INDEX_URL.to_string())
+}
 const LIST_PATH: &str = "~/.ark/list.json";
 
 // "~" is only expanded by shells, not by fs APIs -> resolve it to $HOME
@@ -43,7 +48,7 @@ enum Commands {
 }
 
 fn install_package(package: String) -> Result<(), Box<dyn Error>> {
-    let response = reqwest::blocking::get(INDEX_URL)?; // GET("") is not a real function
+    let response = reqwest::blocking::get(index_url())?; // GET("") is not a real function
 
     let data: Vec<Package> = response.json()?; // json() returns a Result, needs `?`
 
@@ -109,7 +114,7 @@ fn remove_package(package: String) {
 }
 
 fn update_packages() {
-    let response_dataset = reqwest::blocking::get(INDEX_URL).unwrap();
+    let response_dataset = reqwest::blocking::get(index_url()).unwrap();
     let data: Vec<Package> = response_dataset.json().unwrap();
 
     let json_text = fs::read_to_string(expand_tilde(LIST_PATH)).unwrap();

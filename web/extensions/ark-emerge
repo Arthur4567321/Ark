@@ -20,7 +20,9 @@ import time
 import urllib.request
 import urllib.error
 
-INDEX_URL = "http://localhost:8000/packages.json"
+INDEX_URL = os.environ.get(
+    "ARK_INDEX_URL",
+    "https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/packages.json")
 HOME = os.path.expanduser("~")
 ARK_DIR = os.path.join(HOME, ".ark")
 DB = os.path.join(ARK_DIR, "list.json")              # shared with the ark core
