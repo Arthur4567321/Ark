@@ -1,225 +1,127 @@
-use std::error::Error;
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
-
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
+use std::error::Error;
+use std::fs;
+use std::process::Command;
 
-/// Default location of the online package index.
-/// Can be overridden with the `ARK_INDEX_URL` environment variable.
-const DEFAULT_INDEX_URL: &str = "https://ark-repo.example.com/packages.json";
-
-/// Local database of installed packages (`~` is expanded at runtime).
-const INSTALLED_DB: &str = "~/.ark/list.json";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Package {
-    name: String,
-    version: u32,
-    #[serde(default)]
-    description: String,
-    installed: bool,
-    path: String,
-    installation_command: String,
-}
+// Web-hosted package index (serve web/ with: python3 -m http.server 8000)
+const INDEX_URL: &str = "http://localhost:8000/packages.json";
+const LIST_PATH: &str = "list.json";
 
 #[derive(Parser)]
-#[command(name = "ark", version, about = "A tiny package manager driven by a web-hosted JSON index")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Package {
+    name: String,
+    version: u32,
+    installed: bool,
+    path: String,
+    installation_command: String,
+}
+
 #[derive(Subcommand)]
 enum Commands {
-    /// Install a package from the repository
     Install { package: String },
-    /// List installed packages
     List,
-    /// Update all installed packages to the latest repository versions
     Update,
-    /// Remove an installed package
     Remove { package: String },
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+fn install_package(package: String) -> Result<(), Box<dyn Error>> {
+    let response = reqwest::blocking::get(INDEX_URL)?; // GET("") is not a real function
 
-fn index_url() -> String {
-    std::env::var("ARK_INDEX_URL").unwrap_or_else(|_| DEFAULT_INDEX_URL.to_string())
-}
+    let data: Vec<Package> = response.json()?; // json() returns a Result, needs `?`
 
-/// Expand a leading `~` to the user's home directory.
-fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
-}
+    // find() returns an Option -> unwrap it; structs use .name, not ["name"]
+    let result = data.iter().find(|item| item.name == package).unwrap();
 
-fn installed_db_path() -> PathBuf {
-    expand_tilde(INSTALLED_DB)
-}
-
-fn load_installed() -> Result<Vec<Package>, Box<dyn Error>> {
-    let path = installed_db_path();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let json_text = fs::read_to_string(&path)?;
-    let packages = serde_json::from_str(&json_text)?;
-    Ok(packages)
-}
-
-fn save_installed(packages: &[Package]) -> Result<(), Box<dyn Error>> {
-    let path = installed_db_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_string_pretty(packages)?;
-    fs::write(&path, json)?;
-    Ok(())
-}
-
-fn fetch_index() -> Result<Vec<Package>, Box<dyn Error>> {
-    let response = reqwest::blocking::get(index_url())?;
-    let packages = response.json::<Vec<Package>>()?;
-    Ok(packages)
-}
-
-fn run_shell_command(command: &str) -> Result<(), Box<dyn Error>> {
-    let status = Command::new("bash")
+    // .status() actually runs the command and checks the exit code
+    Command::new("bash")
         .arg("-c")
-        .arg(command)
+        .arg(&result.installation_command)
         .status()?;
 
-    if !status.success() {
-        return Err(format!("command failed with status {status}: {command}").into());
-    }
-    Ok(())
-}
+    // first run has no list.json yet -> start from an empty list
+    let mut installed_packages: Vec<Package> = match fs::read_to_string(LIST_PATH) {
+        Ok(json_text) => serde_json::from_str(&json_text)?,
+        Err(_) => Vec::new(),
+    };
 
-// ---------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------
-
-fn install_package(name: &str) -> Result<(), Box<dyn Error>> {
-    let index = fetch_index()?;
-
-    let package = index
-        .iter()
-        .find(|item| item.name == name)
-        .ok_or_else(|| {
-            let available: Vec<&str> = index.iter().map(|p| p.name.as_str()).collect();
-            format!(
-                "package '{name}' not found in repository (available: {})",
-                available.join(", ")
-            )
-        })?
-        .clone();
-
-    println!("Installing {} v{} ...", package.name, package.version);
-    run_shell_command(&package.installation_command)?;
-
-    // Replace any previous record of this package, then store it as installed.
-    let mut installed = load_installed()?;
-    installed.retain(|item| item.name != package.name);
-    installed.push(Package {
+    installed_packages.push(Package {
+        name: result.name.clone(), // missing commas added
+        version: result.version,
         installed: true,
-        ..package.clone()
-    });
-    save_installed(&installed)?;
+        path: result.path.clone(),
+        installation_command: result.installation_command.clone(),
+    }); // missing semicolon added
 
-    println!("Installed {} v{} at {}", package.name, package.version, package.path);
+    let json = serde_json::to_string_pretty(&installed_packages)?;
+
+    fs::write(LIST_PATH, json)?;
+
     Ok(())
 }
 
-fn remove_package(name: &str) -> Result<(), Box<dyn Error>> {
-    let mut installed = load_installed()?;
+fn list_packages() {
+    let json_text = fs::read_to_string(LIST_PATH).unwrap(); // read_file() doesn't exist
+    let data: Vec<Package> = serde_json::from_str(&json_text).unwrap(); // parse_json() doesn't exist
 
-    let position = installed
-        .iter()
-        .position(|item| item.name == name)
-        .ok_or_else(|| format!("package '{name}' is not installed"))?;
-
-    let package = installed.remove(position);
-
-    let path = expand_tilde(&package.path);
-    if path.is_dir() {
-        fs::remove_dir_all(&path)?;
-    } else if path.is_file() {
-        fs::remove_file(&path)?;
-    } else {
-        println!("warning: path {} not found, removing record only", path.display());
+    for item in &data {
+        println!("{}", item.name);
     }
-
-    save_installed(&installed)?;
-    println!("Removed {}", package.name);
-    Ok(())
 }
 
-fn list_packages() -> Result<(), Box<dyn Error>> {
-    let installed = load_installed()?;
+fn remove_package(package: String) {
+    let json_text = fs::read_to_string(LIST_PATH).unwrap();
+    let data: Vec<Package> = serde_json::from_str(&json_text).unwrap();
 
-    if installed.is_empty() {
-        println!("No packages installed.");
-        return Ok(());
-    }
+    let result = data.iter().find(|item| item.name == package).unwrap();
 
-    println!("{:<20} {:<10} {}", "NAME", "VERSION", "PATH");
-    for package in installed {
-        println!("{:<20} {:<10} {}", package.name, package.version, package.path);
-    }
-    Ok(())
+    // bash -c takes ONE command string; "rm" "-rf" path as separate args were ignored
+    Command::new("bash")
+        .arg("-c")
+        .arg(format!("rm -rf {}", result.path))
+        .status()
+        .unwrap();
+
+    // also drop the record from list.json
+    let remaining: Vec<Package> = data.into_iter().filter(|item| item.name != package).collect();
+    fs::write(LIST_PATH, serde_json::to_string_pretty(&remaining).unwrap()).unwrap();
 }
 
-fn update_packages() -> Result<(), Box<dyn Error>> {
-    let index = fetch_index()?;
-    let installed = load_installed()?;
-    let mut updated = 0;
+fn update_packages() {
+    let response_dataset = reqwest::blocking::get(INDEX_URL).unwrap();
+    let data: Vec<Package> = response_dataset.json().unwrap();
 
-    for package in &installed {
-        if let Some(repo_package) = index.iter().find(|item| item.name == package.name) {
-            if repo_package.version > package.version {
-                println!(
-                    "Updating {} from v{} to v{} ...",
-                    package.name, package.version, repo_package.version
-                );
-                remove_package(&package.name)?;
-                install_package(&repo_package.name)?;
-                updated += 1;
+    let json_text = fs::read_to_string(LIST_PATH).unwrap();
+    let installed_packages: Vec<Package> = serde_json::from_str(&json_text).unwrap();
+
+    // `for a in x && b in y` is invalid syntax -> nested loops
+    for item in &data {
+        for package in &installed_packages {
+            // compare only matching package names, not every pair
+            if (item.version > package.version) && item.name == package.name {
+                remove_package(package.name.clone());
+                install_package(item.name.clone()).unwrap();
             }
         }
     }
-
-    if updated == 0 {
-        println!("All packages are up to date.");
-    } else {
-        println!("Updated {updated} package(s).");
-    }
-    Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
-    let result = match cli.command {
-        Commands::Install { package } => install_package(&package),
+    match cli.command {
+        // match arms need `,` not `;`
+        Commands::Install { package } => install_package(package)?,
         Commands::List => list_packages(),
         Commands::Update => update_packages(),
-        Commands::Remove { package } => remove_package(&package),
-    };
-
-    if let Err(err) = result {
-        eprintln!("error: {err}");
-        std::process::exit(1);
+        Commands::Remove { package } => remove_package(package), // argument was missing
     }
+
+    Ok(())
 }
