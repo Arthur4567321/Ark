@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 use std::process::Command;
 
@@ -22,6 +23,48 @@ fn expand_tilde(path: &str) -> String {
     }
 }
 
+// expose a package's executables as commands in ~/.local/bin (on PATH)
+fn link_commands(path: &str, bin: &str) -> String {
+    let dir = expand_tilde("~/.local/bin");
+    let target_dir = expand_tilde(path);
+    let mut names: Vec<String> = Vec::new();
+
+    let _ = fs::create_dir_all(&dir);
+
+    if !bin.is_empty() {
+        // the index names the executable(s) to expose
+        names = bin.split(',').map(|s| s.trim().to_string()).collect();
+    } else if let Ok(entries) = fs::read_dir(&target_dir) {
+        // fallback: expose every executable file in the package dir
+        for entry in entries.flatten() {
+            let exec = entry
+                .metadata()
+                .map(|m| m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false);
+            if entry.path().is_file() && exec {
+                names.push(entry.file_name().to_string_lossy().to_string());
+            }
+        }
+    }
+
+    let mut linked = Vec::new();
+    for name in &names {
+        let dest = format!("{dir}/{name}");
+        let _ = fs::remove_file(&dest); // replace stale links on reinstall
+        if symlink(format!("{target_dir}/{name}"), &dest).is_ok() {
+            linked.push(name.clone());
+        }
+    }
+
+    if !linked.is_empty()
+        && !std::env::var("PATH").unwrap_or_default().contains(&dir)
+    {
+        println!("note: add ~/.local/bin to PATH: export PATH=\"$HOME/.local/bin:$PATH\"");
+    }
+
+    linked.join(",")
+}
+
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
@@ -35,6 +78,8 @@ struct Package {
     installed: bool,
     path: String,
     installation_command: String,
+    #[serde(default)]
+    bin: String,
 }
 
 #[derive(Subcommand)]
@@ -61,6 +106,12 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
         .arg(&result.installation_command)
         .status()?;
 
+    // expose the package's executables as commands (~/.local/bin)
+    let linked = link_commands(&result.path, &result.bin);
+    if !linked.is_empty() {
+        println!("commands now available: {linked}");
+    }
+
     // first run has no list.json yet -> start from an empty list
     let mut installed_packages: Vec<Package> = match fs::read_to_string(expand_tilde(LIST_PATH)) {
         Ok(json_text) => serde_json::from_str(&json_text)?,
@@ -73,6 +124,7 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
         installed: true,
         path: result.path.clone(),
         installation_command: result.installation_command.clone(),
+        bin: linked,
     }); // missing semicolon added
 
     let json = serde_json::to_string_pretty(&installed_packages)?;
@@ -107,6 +159,11 @@ fn remove_package(package: String) {
         .arg(format!("rm -rf {}", result.path))
         .status()
         .unwrap();
+
+    // drop the commands we exposed in ~/.local/bin
+    for name in result.bin.split(',').filter(|s| !s.is_empty()) {
+        let _ = fs::remove_file(format!("{}/{}", expand_tilde("~/.local/bin"), name));
+    }
 
     // also drop the record from list.json
     let remaining: Vec<Package> = data.into_iter().filter(|item| item.name != package).collect();

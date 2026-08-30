@@ -5,7 +5,8 @@
     "description": "Classic hello-world demo binary.",
     "installed": false,
     "path": "~/.ark/packages/hello",
-    "installation_command": "mkdir -p ~/.ark/packages/hello && printf '#!/bin/sh\\necho \"Hello from Ark!\"\\n' > ~/.ark/packages/hello/hello && chmod +x ~/.ark/packages/hello/hello"
+    "installation_command": "mkdir -p ~/.ark/packages/hello && printf '#!/bin/sh\\necho \"Hello from Ark!\"\\n' > ~/.ark/packages/hello/hello && chmod +x ~/.ark/packages/hello/hello",
+    "bin": "hello"
   },
   {
     "name": "cowsay-lite",
@@ -13,7 +14,8 @@
     "description": "A tiny ASCII cow that repeats what you say.",
     "installed": false,
     "path": "~/.ark/packages/cowsay-lite",
-    "installation_command": "mkdir -p ~/.ark/packages/cowsay-lite && printf '#!/bin/sh\\necho \" $* \"\\necho \"        \\   ^__^\\n         \\  (oo)\\\\_______\\n            (__)\\\\       )\\\\/\\\\\\n                ||----w |\\n                ||     ||\\n\"\\n' > ~/.ark/packages/cowsay-lite/cowsay && chmod +x ~/.ark/packages/cowsay-lite/cowsay"
+    "installation_command": "mkdir -p ~/.ark/packages/cowsay-lite && printf '#!/bin/sh\\necho \" $* \"\\necho \"        \\   ^__^\\n         \\  (oo)\\\\_______\\n            (__)\\\\       )\\\\/\\\\\\n                ||----w |\\n                ||     ||\\n\"\\n' > ~/.ark/packages/cowsay-lite/cowsay && chmod +x ~/.ark/packages/cowsay-lite/cowsay",
+    "bin": "cowsay"
   },
   {
     "name": "figlet-mini",
@@ -21,7 +23,8 @@
     "description": "Generates small ASCII-art banners from text.",
     "installed": false,
     "path": "~/.ark/packages/figlet-mini",
-    "installation_command": "mkdir -p ~/.ark/packages/figlet-mini && printf '#!/bin/sh\\nfor word in \"$@\"; do printf \"== %s ==\\n\" \"$word\" | tr a-z A-Z; done\\n' > ~/.ark/packages/figlet-mini/figlet && chmod +x ~/.ark/packages/figlet-mini/figlet"
+    "installation_command": "mkdir -p ~/.ark/packages/figlet-mini && printf '#!/bin/sh\\nfor word in \"$@\"; do printf \"== %s ==\\n\" \"$word\" | tr a-z A-Z; done\\n' > ~/.ark/packages/figlet-mini/figlet && chmod +x ~/.ark/packages/figlet-mini/figlet",
+    "bin": "figlet"
   },
   {
     "name": "fortune-ark",
@@ -29,7 +32,8 @@
     "description": "Prints a random technology quote.",
     "installed": false,
     "path": "~/.ark/packages/fortune-ark",
-    "installation_command": "mkdir -p ~/.ark/packages/fortune-ark && printf '#!/bin/sh\\nquotes=(\"Talk is cheap. Show me the code.\" \"Programs must be written for people to read.\" \"Simplicity is prerequisite for reliability.\" \"Make it work, make it right, make it fast.\")\\necho \"${quotes[$((RANDOM %% ${#quotes[@]}))]}\"\\n' > ~/.ark/packages/fortune-ark/fortune && chmod +x ~/.ark/packages/fortune-ark/fortune"
+    "installation_command": "mkdir -p ~/.ark/packages/fortune-ark && printf '#!/bin/sh\\nquotes=(\"Talk is cheap. Show me the code.\" \"Programs must be written for people to read.\" \"Simplicity is prerequisite for reliability.\" \"Make it work, make it right, make it fast.\")\\necho \"${quotes[$((RANDOM %% ${#quotes[@]}))]}\"\\n' > ~/.ark/packages/fortune-ark/fortune && chmod +x ~/.ark/packages/fortune-ark/fortune",
+    "bin": "fortune"
   },
   {
     "name": "weather-cli",
@@ -37,7 +41,8 @@
     "description": "One-line weather lookup powered by wttr.in.",
     "installed": false,
     "path": "~/.ark/packages/weather-cli",
-    "installation_command": "mkdir -p ~/.ark/packages/weather-cli && printf '#!/bin/sh\\ncurl -s \"wttr.in/${1:-Berlin}?format=3\"\\n' > ~/.ark/packages/weather-cli/weather && chmod +x ~/.ark/packages/weather-cli/weather"
+    "installation_command": "mkdir -p ~/.ark/packages/weather-cli && printf '#!/bin/sh\\ncurl -s \"wttr.in/${1:-Berlin}?format=3\"\\n' > ~/.ark/packages/weather-cli/weather && chmod +x ~/.ark/packages/weather-cli/weather",
+    "bin": "weather"
   },
   {
     "name": "sysinfo-ark",
@@ -45,7 +50,8 @@
     "description": "Quick system summary: kernel, uptime and memory.",
     "installed": false,
     "path": "~/.ark/packages/sysinfo-ark",
-    "installation_command": "mkdir -p ~/.ark/packages/sysinfo-ark && printf '#!/bin/sh\\necho \"Kernel:  $(uname -r)\"\\necho \"Uptime:  $(uptime -p)\"\\necho \"Memory:  $(free -h | awk \"/Mem:/ {print \\$3 \\\" / \\\" \\$2}\")\"\\n' > ~/.ark/packages/sysinfo-ark/sysinfo && chmod +x ~/.ark/packages/sysinfo-ark/sysinfo"
+    "installation_command": "mkdir -p ~/.ark/packages/sysinfo-ark && printf '#!/bin/sh\\necho \"Kernel:  $(uname -r)\"\\necho \"Uptime:  $(uptime -p)\"\\necho \"Memory:  $(free -h | awk \"/Mem:/ {print \\$3 \\\" / \\\" \\$2}\")\"\\n' > ~/.ark/packages/sysinfo-ark/sysinfo && chmod +x ~/.ark/packages/sysinfo-ark/sysinfo",
+    "bin": "sysinfo"
   },
   {
     "name": "emerge",
@@ -61,8 +67,13 @@
     "description": "Hello that honours USE flags (+color +fancy +quotes).",
     "installed": false,
     "path": "~/.ark/packages/hello-gentoo",
-    "use_flags": ["color", "fancy", "quotes"],
-    "installation_command": "mkdir -p ~/.ark/packages/hello-gentoo && cat > ~/.ark/packages/hello-gentoo/hello-gentoo <<'EOF'\n#!/bin/sh\nU=$(cat \"$HOME/.ark/emerge/package.use/hello-gentoo\" 2>/dev/null || true)\necho -n \"hello-gentoo\"\necho \"$U\" | grep -q \"+fancy\" && echo -n \" (fancy!)\"\necho \"$U\" | grep -q \"+color\" && printf '\\033[32m in COLOR\\033[0m'\necho\necho \"$U\" | grep -q \"+quotes\" && echo '\"Talk is cheap. Show me the code.\"'\nEOF\nchmod +x ~/.ark/packages/hello-gentoo/hello-gentoo"
+    "use_flags": [
+      "color",
+      "fancy",
+      "quotes"
+    ],
+    "installation_command": "mkdir -p ~/.ark/packages/hello-gentoo && cat > ~/.ark/packages/hello-gentoo/hello-gentoo <<'EOF'\n#!/bin/sh\nU=$(cat \"$HOME/.ark/emerge/package.use/hello-gentoo\" 2>/dev/null || true)\necho -n \"hello-gentoo\"\necho \"$U\" | grep -q \"+fancy\" && echo -n \" (fancy!)\"\necho \"$U\" | grep -q \"+color\" && printf '\\033[32m in COLOR\\033[0m'\necho\necho \"$U\" | grep -q \"+quotes\" && echo '\"Talk is cheap. Show me the code.\"'\nEOF\nchmod +x ~/.ark/packages/hello-gentoo/hello-gentoo",
+    "bin": "hello-gentoo"
   },
   {
     "name": "super-cow",
@@ -70,7 +81,10 @@
     "description": "Super cow powers. Depends on hello (dependency safety demo).",
     "installed": false,
     "path": "~/.ark/packages/super-cow",
-    "depends": ["hello"],
-    "installation_command": "mkdir -p ~/.ark/packages/super-cow && cat > ~/.ark/packages/super-cow/super-cow <<'EOF'\n#!/bin/sh\necho \"super cow engaged\"\necho '   (__)'\necho '   (oo)\\_______'\necho '   (__)\\       )\\/\\'\necho '       ||----w |'\necho '       ||     ||'\necho \"dependency check: $(~/.ark/packages/hello/hello 2>/dev/null || echo MISSING)\"\nEOF\nchmod +x ~/.ark/packages/super-cow/super-cow"
+    "depends": [
+      "hello"
+    ],
+    "installation_command": "mkdir -p ~/.ark/packages/super-cow && cat > ~/.ark/packages/super-cow/super-cow <<'EOF'\n#!/bin/sh\necho \"super cow engaged\"\necho '   (__)'\necho '   (oo)\\_______'\necho '   (__)\\       )\\/\\'\necho '       ||----w |'\necho '       ||     ||'\necho \"dependency check: $(~/.ark/packages/hello/hello 2>/dev/null || echo MISSING)\"\nEOF\nchmod +x ~/.ark/packages/super-cow/super-cow",
+    "bin": "super-cow"
   }
 ]

@@ -182,6 +182,18 @@ def rollback_latest(auto=False):
     if os.path.isdir(src):
         shutil.rmtree(FLAGS_DIR, ignore_errors=True)
         shutil.copytree(src, FLAGS_DIR)
+    # re-expose commands for restored packages (best effort)
+    for p in load_db():
+        for n in (p.get("bin") or "").split(","):
+            if n:
+                src_path = os.path.join(os.path.expanduser(p["path"]), n)
+                dest = os.path.join(HOME, ".local", "bin", n)
+                if os.path.exists(src_path):
+                    try:
+                        os.remove(dest)
+                    except FileNotFoundError:
+                        pass
+                    os.symlink(src_path, dest)
     shutil.rmtree(latest)
     ok(f"rolled back '{man['tag']}' ({man['time']})"
        + (" — automatic, after a failed operation" if auto else ""))
@@ -236,16 +248,39 @@ def run_install_command(pkg, flags, quiet):
             f"installation command for {pkg['name']} failed "
             f"(status {result.returncode})")
 
+def link_commands(pkg):
+    """Expose a package's executables as commands in ~/.local/bin (on PATH)."""
+    bin_dir = os.path.join(HOME, ".local", "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    root = os.path.expanduser(pkg["path"])
+    if pkg.get("bin"):
+        names = [n.strip() for n in pkg["bin"].split(",") if n.strip()]
+    else:
+        names = [e for e in sorted(os.listdir(root))
+                 if os.path.isfile(os.path.join(root, e))
+                 and os.access(os.path.join(root, e), os.X_OK)]
+    for n in names:
+        dest = os.path.join(bin_dir, n)
+        try:
+            os.remove(dest)
+        except FileNotFoundError:
+            pass
+        os.symlink(os.path.join(root, n), dest)
+    return ",".join(names)
+
 def do_install(index, pkg, flags, oneshot, quiet):
     snap = Snapshot(f"install-{pkg['name']}")
     write_flags(pkg, flags)
     validate_flags(pkg, flags, quiet)
+    bins = ""
     try:
         run_install_command(pkg, flags, quiet)
+        bins = link_commands(pkg)
         db = [p for p in load_db() if p["name"] != pkg["name"]]
         db.append({"name": pkg["name"], "version": pkg["version"],
                    "installed": True, "path": pkg["path"],
-                   "installation_command": pkg["installation_command"]})
+                   "installation_command": pkg["installation_command"],
+                   "bin": bins})
         save_db(db)
         if oneshot:
             save_world([n for n in load_world() if n != pkg["name"]])
@@ -258,6 +293,8 @@ def do_install(index, pkg, flags, oneshot, quiet):
     prune_backups()
     ok(f"{pkg['name']}-{pkg['version']} installed → {pkg['path']}"
        + (f'  USE="{use_str(flags)}"' if flags else ""))
+    if bins:
+        ok(f"commands now available: {bins}")
 
 def use_str(flags):
     return " ".join(flags)
@@ -323,6 +360,12 @@ def cmd_remove(args):
         if os.path.exists(path):
             shutil.move(path, trash)        # trash, never destroy (Debian)
             snap.note_removed(path, trash)
+        for n in (inst.get("bin") or "").split(","):
+            if n:                           # drop exposed commands
+                try:
+                    os.remove(os.path.join(HOME, ".local", "bin", n))
+                except FileNotFoundError:
+                    pass
         save_db([p for p in load_db() if p["name"] != inst["name"]])
         save_world([n for n in load_world() if n != inst["name"]])
         prune_backups()
