@@ -1,0 +1,50 @@
+[
+  {
+    "name": "hello",
+    "version": 1,
+    "description": "Classic hello-world demo binary.",
+    "installed": false,
+    "path": "~/.ark/packages/hello",
+    "installation_command": "mkdir -p ~/.ark/packages/hello && printf '#!/bin/sh\\necho \"Hello from Ark!\"\\n' > ~/.ark/packages/hello/hello && chmod +x ~/.ark/packages/hello/hello"
+  },
+  {
+    "name": "cowsay-lite",
+    "version": 3,
+    "description": "A tiny ASCII cow that repeats what you say.",
+    "installed": false,
+    "path": "~/.ark/packages/cowsay-lite",
+    "installation_command": "mkdir -p ~/.ark/packages/cowsay-lite && printf '#!/bin/sh\\necho \" $* \"\\necho \"        \\   ^__^\\n         \\  (oo)\\\\_______\\n            (__)\\\\       )\\\\/\\\\\\n                ||----w |\\n                ||     ||\\n\"\\n' > ~/.ark/packages/cowsay-lite/cowsay && chmod +x ~/.ark/packages/cowsay-lite/cowsay"
+  },
+  {
+    "name": "figlet-mini",
+    "version": 2,
+    "description": "Generates small ASCII-art banners from text.",
+    "installed": false,
+    "path": "~/.ark/packages/figlet-mini",
+    "installation_command": "mkdir -p ~/.ark/packages/figlet-mini && printf '#!/bin/sh\\nfor word in \"$@\"; do printf \"== %s ==\\n\" \"$word\" | tr a-z A-Z; done\\n' > ~/.ark/packages/figlet-mini/figlet && chmod +x ~/.ark/packages/figlet-mini/figlet"
+  },
+  {
+    "name": "fortune-ark",
+    "version": 1,
+    "description": "Prints a random technology quote.",
+    "installed": false,
+    "path": "~/.ark/packages/fortune-ark",
+    "installation_command": "mkdir -p ~/.ark/packages/fortune-ark && printf '#!/bin/sh\\nquotes=(\"Talk is cheap. Show me the code.\" \"Programs must be written for people to read.\" \"Simplicity is prerequisite for reliability.\" \"Make it work, make it right, make it fast.\")\\necho \"${quotes[$((RANDOM %% ${#quotes[@]}))]}\"\\n' > ~/.ark/packages/fortune-ark/fortune && chmod +x ~/.ark/packages/fortune-ark/fortune"
+  },
+  {
+    "name": "weather-cli",
+    "version": 2,
+    "description": "One-line weather lookup powered by wttr.in.",
+    "installed": false,
+    "path": "~/.ark/packages/weather-cli",
+    "installation_command": "mkdir -p ~/.ark/packages/weather-cli && printf '#!/bin/sh\\ncurl -s \"wttr.in/${1:-Berlin}?format=3\"\\n' > ~/.ark/packages/weather-cli/weather && chmod +x ~/.ark/packages/weather-cli/weather"
+  },
+  {
+    "name": "sysinfo-ark",
+    "version": 1,
+    "description": "Quick system summary: kernel, uptime and memory.",
+    "installed": false,
+    "path": "~/.ark/packages/sysinfo-ark",
+    "installation_command": "mkdir -p ~/.ark/packages/sysinfo-ark && printf '#!/bin/sh\\necho \"Kernel:  $(uname -r)\"\\necho \"Uptime:  $(uptime -p)\"\\necho \"Memory:  $(free -h | awk \"/Mem:/ {print \\$3 \\\" / \\\" \\$2}\")\"\\n' > ~/.ark/packages/sysinfo-ark/sysinfo && chmod +x ~/.ark/packages/sysinfo-ark/sysinfo"
+  }
+]
