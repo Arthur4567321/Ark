@@ -1,0 +1,26 @@
+# ArkForge recipe — cowsay-lite
+# USE flags: plain → no cow, just the text; (default) → the full cow
+pkgname=cowsay-lite
+pkgver=4
+flags=(plain)
+provides=(bin/cowsay)
+
+build() {
+    if has_flag plain; then
+        printf '#!/bin/sh\necho "$*"\n' > cowsay
+    else
+        cat > cowsay <<'EOF'
+#!/bin/sh
+echo " $* "
+echo "        \\   ^__^"
+echo "         \\  (oo)\\_______"
+echo "            (__)\\       )\\/\\"
+echo "                ||----w |"
+echo "                ||     ||"
+EOF
+    fi
+}
+
+package() {
+    install -Dm755 cowsay "$pkgdir/bin/cowsay"
+}

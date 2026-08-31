@@ -1,0 +1,25 @@
+# ArkForge recipe — super-cow
+# USE flags: paranoid → checks that its `hello` dependency exists at runtime
+pkgname=super-cow
+pkgver=3
+flags=(paranoid)
+provides=(bin/super-cow)
+
+build() {
+    cat > super-cow <<'EOF'
+#!/bin/sh
+echo "super cow engaged"
+echo '   (__)'
+echo '   (oo)\_______'
+echo '   (__)\       )\/\'
+echo '       ||----w |'
+echo '       ||     ||'
+EOF
+    if has_flag paranoid; then
+        echo 'echo "dependency check: $(~/.ark/packages/hello/bin/hello 2>/dev/null || echo MISSING)"' >> super-cow
+    fi
+}
+
+package() {
+    install -Dm755 super-cow "$pkgdir/bin/super-cow"
+}

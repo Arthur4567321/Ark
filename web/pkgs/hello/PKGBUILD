@@ -1,0 +1,18 @@
+# ArkForge recipe — hello
+# USE flags: minimal  → plain output; (default) → banner output
+pkgname=hello
+pkgver=2
+flags=(minimal)
+provides=(bin/hello)
+
+build() {
+    if has_flag minimal; then
+        printf '#!/bin/sh\necho hello\n' > hello
+    else
+        printf '#!/bin/sh\nprintf "== Ark ==\\nHello from Ark!\\n"\n' > hello
+    fi
+}
+
+package() {
+    install -Dm755 hello "$pkgdir/bin/hello"
+}

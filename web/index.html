@@ -133,6 +133,32 @@
       border-radius: 6px;
       padding: 0.4rem 0.7rem;
     }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+    .chips .label {
+      color: var(--muted);
+      font-size: 0.75rem;
+      align-self: center;
+    }
+    .chip {
+      font-family: ui-monospace, monospace;
+      font-size: 0.72rem;
+      color: var(--accent-2);
+      background: rgba(247, 129, 102, 0.1);
+      border: 1px solid rgba(247, 129, 102, 0.35);
+      border-radius: 999px;
+      padding: 0.1rem 0.55rem;
+    }
+    .recipe-link {
+      font-family: ui-monospace, monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .recipe-link a { color: var(--accent-2); text-decoration: none; }
+    .recipe-link a:hover { text-decoration: underline; }
     .error {
       max-width: 700px;
       margin: 3rem auto;
@@ -218,6 +244,32 @@
       path.className = "path";
       path.textContent = "📁 " + pkg.path;
 
+      if (Array.isArray(pkg.flags) && pkg.flags.length) {
+        const chips = document.createElement("div");
+        chips.className = "chips";
+        const label = document.createElement("span");
+        label.className = "label";
+        label.textContent = "USE flags:";
+        chips.append(label);
+        for (const f of pkg.flags) {
+          const chip = document.createElement("span");
+          chip.className = "chip";
+          chip.textContent = "+" + f;
+          chips.append(chip);
+        }
+        el.append(chips);
+      }
+
+      if (pkg.recipe) {
+        const rec = document.createElement("div");
+        rec.className = "recipe-link";
+        const a = document.createElement("a");
+        a.href = pkg.recipe;
+        a.textContent = "📜 " + pkg.recipe;
+        rec.append(a);
+        el.append(rec);
+      }
+
       const cmdBox = document.createElement("div");
       cmdBox.className = "cmd";
       cmdBox.textContent = pkg.installation_command;
@@ -228,7 +280,9 @@
 
       const hint = document.createElement("div");
       hint.className = "install-hint";
-      hint.textContent = "$ ark install " + pkg.name;
+      hint.textContent = pkg.recipe
+        ? "$ ark forge " + pkg.name + (Array.isArray(pkg.flags) && pkg.flags.length ? " --flags " + pkg.flags.join(",") : "")
+        : "$ ark install " + pkg.name;
 
       el.append(head, desc, path, cmdBox, hint);
       return el;

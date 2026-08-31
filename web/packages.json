@@ -1,96 +1,128 @@
 [
   {
     "name": "hello",
-    "version": 1,
+    "version": 2,
     "description": "Classic hello-world demo binary.",
     "installed": false,
     "path": "~/.ark/packages/hello",
     "depends": [],
-    "installation_command": "mkdir -p ~/.ark/packages/hello && printf '#!/bin/sh\\necho \"Hello from Ark!\"\\n' > ~/.ark/packages/hello/hello && chmod +x ~/.ark/packages/hello/hello",
+    "recipe": "pkgs/hello/PKGBUILD",
+    "flags": [
+      "minimal"
+    ],
+    "installation_command": "ark forge hello",
     "bin": "hello"
   },
   {
     "name": "cowsay-lite",
-    "version": 3,
+    "version": 4,
     "description": "A tiny ASCII cow that repeats what you say.",
     "installed": false,
     "path": "~/.ark/packages/cowsay-lite",
-    "depends": ["fortune-ark"],
-    "installation_command": "mkdir -p ~/.ark/packages/cowsay-lite && printf '#!/bin/sh\\necho \" $* \"\\necho \"        \\   ^__^\\n         \\  (oo)\\\\_______\\n            (__)\\\\       )\\\\/\\\\\\n                ||----w |\\n                ||     ||\\n\"\\n' > ~/.ark/packages/cowsay-lite/cowsay && chmod +x ~/.ark/packages/cowsay-lite/cowsay",
+    "depends": [
+      "fortune-ark"
+    ],
+    "recipe": "pkgs/cowsay-lite/PKGBUILD",
+    "flags": [
+      "plain"
+    ],
+    "installation_command": "ark forge cowsay-lite",
     "bin": "cowsay"
   },
   {
     "name": "figlet-mini",
-    "version": 2,
+    "version": 3,
     "description": "Generates small ASCII-art banners from text.",
     "installed": false,
     "path": "~/.ark/packages/figlet-mini",
     "depends": [],
-    "installation_command": "mkdir -p ~/.ark/packages/figlet-mini && printf '#!/bin/sh\\nfor word in \"$@\"; do printf \"== %s ==\\n\" \"$word\" | tr a-z A-Z; done\\n' > ~/.ark/packages/figlet-mini/figlet && chmod +x ~/.ark/packages/figlet-mini/figlet",
+    "recipe": "pkgs/figlet-mini/PKGBUILD",
+    "flags": [
+      "upper"
+    ],
+    "installation_command": "ark forge figlet-mini",
     "bin": "figlet"
   },
   {
     "name": "fortune-ark",
-    "version": 1,
+    "version": 3,
     "description": "Prints a random technology quote.",
     "installed": false,
     "path": "~/.ark/packages/fortune-ark",
     "depends": [],
-    "installation_command": "mkdir -p ~/.ark/packages/fortune-ark && printf '#!/bin/sh\\nquotes=(\"Talk is cheap. Show me the code.\" \"Programs must be written for people to read.\" \"Simplicity is prerequisite for reliability.\" \"Make it work, make it right, make it fast.\")\\necho \"${quotes[$((RANDOM %% ${#quotes[@]}))]}\"\\n' > ~/.ark/packages/fortune-ark/fortune && chmod +x ~/.ark/packages/fortune-ark/fortune",
+    "recipe": "pkgs/fortune-ark/PKGBUILD",
+    "flags": [
+      "scifi"
+    ],
+    "installation_command": "ark forge fortune-ark",
     "bin": "fortune"
   },
   {
     "name": "weather-cli",
-    "version": 2,
+    "version": 3,
     "description": "One-line weather lookup powered by wttr.in.",
     "installed": false,
     "path": "~/.ark/packages/weather-cli",
     "depends": [],
-    "installation_command": "mkdir -p ~/.ark/packages/weather-cli && printf '#!/bin/sh\\ncurl -s \"wttr.in/${1:-Berlin}?format=3\"\\n' > ~/.ark/packages/weather-cli/weather && chmod +x ~/.ark/packages/weather-cli/weather",
+    "recipe": "pkgs/weather-cli/PKGBUILD",
+    "flags": [
+      "fahrenheit"
+    ],
+    "installation_command": "ark forge weather-cli",
     "bin": "weather"
   },
   {
     "name": "sysinfo-ark",
-    "version": 1,
+    "version": 2,
     "description": "Quick system summary: kernel, uptime and memory.",
     "installed": false,
     "path": "~/.ark/packages/sysinfo-ark",
     "depends": [],
-    "installation_command": "mkdir -p ~/.ark/packages/sysinfo-ark && printf '#!/bin/sh\\necho \"Kernel:  $(uname -r)\"\\necho \"Uptime:  $(uptime -p)\"\\necho \"Memory:  $(free -h | awk \"/Mem:/ {print \\$3 \\\" / \\\" \\$2}\")\"\\n' > ~/.ark/packages/sysinfo-ark/sysinfo && chmod +x ~/.ark/packages/sysinfo-ark/sysinfo",
+    "recipe": "pkgs/sysinfo-ark/PKGBUILD",
+    "flags": [
+      "verbose"
+    ],
+    "installation_command": "ark forge sysinfo-ark",
     "bin": "sysinfo"
   },
   {
-    "name": "emerge",
-    "version": 1,
-    "description": "Gentoo-style USE flags with Debian-grade safety: an ark extension.",
-    "installed": false,
-    "path": "~/.ark/extensions/ark-emerge",
-    "installation_command": "mkdir -p ~/.ark/extensions && curl -fsSL https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/extensions/ark-emerge -o ~/.ark/extensions/ark-emerge && chmod +x ~/.ark/extensions/ark-emerge"
-  },
-  {
     "name": "hello-gentoo",
-    "version": 1,
-    "description": "Hello that honours USE flags (+color +fancy +quotes).",
+    "version": 3,
+    "description": "Hello with USE flags baked in at build time (+color +fancy +quotes).",
     "installed": false,
     "path": "~/.ark/packages/hello-gentoo",
-    "use_flags": [
+    "depends": [],
+    "recipe": "pkgs/hello-gentoo/PKGBUILD",
+    "flags": [
       "color",
       "fancy",
       "quotes"
     ],
-    "installation_command": "mkdir -p ~/.ark/packages/hello-gentoo && cat > ~/.ark/packages/hello-gentoo/hello-gentoo <<'EOF'\n#!/bin/sh\nU=$(cat \"$HOME/.ark/emerge/package.use/hello-gentoo\" 2>/dev/null || true)\necho -n \"hello-gentoo\"\necho \"$U\" | grep -q \"+fancy\" && echo -n \" (fancy!)\"\necho \"$U\" | grep -q \"+color\" && printf '\\033[32m in COLOR\\033[0m'\necho\necho \"$U\" | grep -q \"+quotes\" && echo '\"Talk is cheap. Show me the code.\"'\nEOF\nchmod +x ~/.ark/packages/hello-gentoo/hello-gentoo",
+    "installation_command": "ark forge hello-gentoo",
     "bin": "hello-gentoo"
   },
   {
     "name": "super-cow",
-    "version": 2,
+    "version": 3,
     "description": "Super cow powers. Depends on hello (dependency safety demo).",
     "installed": false,
     "path": "~/.ark/packages/super-cow",
     "depends": [
       "hello"
     ],
-    "installation_command": "mkdir -p ~/.ark/packages/super-cow && cat > ~/.ark/packages/super-cow/super-cow <<'EOF'\n#!/bin/sh\necho \"super cow engaged\"\necho '   (__)'\necho '   (oo)\\_______'\necho '   (__)\\       )\\/\\'\necho '       ||----w |'\necho '       ||     ||'\necho \"dependency check: $(~/.ark/packages/hello/hello 2>/dev/null || echo MISSING)\"\nEOF\nchmod +x ~/.ark/packages/super-cow/super-cow",
+    "recipe": "pkgs/super-cow/PKGBUILD",
+    "flags": [
+      "paranoid"
+    ],
+    "installation_command": "ark forge super-cow",
     "bin": "super-cow"
+  },
+  {
+    "name": "emerge",
+    "version": 1,
+    "description": "Legacy runtime-flag experiment, superseded by `ark forge`.",
+    "installed": false,
+    "path": "~/.ark/extensions/ark-emerge",
+    "installation_command": "mkdir -p ~/.ark/extensions && curl -fsSL https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/extensions/ark-emerge -o ~/.ark/extensions/ark-emerge && chmod +x ~/.ark/extensions/ark-emerge"
   }
 ]
