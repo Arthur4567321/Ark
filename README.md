@@ -31,22 +31,36 @@ cp target/release/ark-forge ~/.ark/extensions/ark-forge
 A standalone directory, its own git repo, intentionally outside this project:
 
 ```
-~/ark-repo
-├── packages.json        # the index the CLI downloads
-├── index.html           # searchable web catalog (USE-flag chips, recipe links)
+~/ark-repo                      →  github.com/Arthur4567321/ark-repo
+├── packages.json               # the index (fetched from GitHub raw)
+├── index.html                  # searchable web catalog (USE-flag chips)
 ├── pkgs/
-│   └── <name>/PKGBUILD  # one Arch-style recipe per package
-└── extensions/          # installable extensions (e.g. the legacy ark-emerge)
+│   └── <name>/PKGBUILD         # one Arch-style recipe per package
+└── extensions/                 # installable extensions (ark-forge, ark-emerge)
 ```
 
-Serve it locally:
+**Hosting is git-only** — no server anywhere. Both `ark` and `ark-forge`
+default to:
+
+```
+https://raw.githubusercontent.com/Arthur4567321/ark-repo/main/packages.json
+```
+
+Publishing package changes is just a push:
+
+```bash
+cd ~/ark-repo && git add -A && git commit -m "…" && git push
+```
+
+(`raw.githubusercontent.com` caches for ~5 minutes — fresh pushes may take a
+moment to appear.)
+
+For local development without pushing, serve a checkout and override:
 
 ```bash
 python3 -m http.server 8000 --directory ~/ark-repo
+ARK_INDEX_URL=http://localhost:8000/packages.json ark forge hello
 ```
-
-Or publish it as its own git repo and point ark at the raw URL (override with
-`ARK_INDEX_URL`, or edit `INDEX_URL` in `src/main.rs`).
 
 ## Usage
 
@@ -147,8 +161,8 @@ The **ark-forge extension itself** is installable from the repo's
 ark install ark-forge     # curls it from the index host into ~/.ark/extensions/
 ```
 
-(The hardcoded host in its `installation_command` follows wherever you
-publish the repo — swap the URL when you host it.)
+(`ark install ark-forge` curls the binary straight from the repo's GitHub raw
+URL — works from any machine, no server running.)
 
 ## Extensions
 

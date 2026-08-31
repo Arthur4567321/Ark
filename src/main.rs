@@ -6,9 +6,9 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 use std::process::Command;
 
-// Package index hosted on GitHub (override with the ARK_INDEX_URL env var)
+// Package index — the ark-repo git repository on GitHub (override with ARK_INDEX_URL)
 const INDEX_URL: &str =
-    "https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/packages.json";
+    "https://raw.githubusercontent.com/Arthur4567321/ark-repo/main/packages.json";
 
 fn index_url() -> String {
     std::env::var("ARK_INDEX_URL").unwrap_or_else(|_| INDEX_URL.to_string())
@@ -96,6 +96,9 @@ enum Commands {
 
 fn install_package(package: String) -> Result<(), Box<dyn Error>> {
     let response = reqwest::blocking::get(index_url())?; // GET("") is not a real function
+    if !response.status().is_success() {
+        return Err(format!("index fetch failed: {} {}", response.status(), index_url()).into());
+    }
 
     let data: Vec<Package> = response.json()?; // json() returns a Result, needs `?`
 

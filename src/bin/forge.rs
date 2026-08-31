@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-const DEFAULT_INDEX: &str = "http://localhost:8000/packages.json";
+const DEFAULT_INDEX: &str =
+    "https://raw.githubusercontent.com/Arthur4567321/ark-repo/main/packages.json";
 const LIST_PATH: &str = "~/.ark/list.json";
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,7 @@ fn http_get(url: &str) -> Result<String, Box<dyn Error>> {
 
 fn download_recipe(index_url: &str, pkg: &str) -> Result<(String, String), Box<dyn Error>> {
     let index_text = http_get(index_url).map_err(|e| {
-        format!("can't reach index at {index_url} ({e})\n  hint: python3 -m http.server 8000 --directory ~/ark-repo")
+        format!("can't reach index at {index_url} ({e})\n  hint: is ark-repo pushed to GitHub? (dev override: ARK_INDEX_URL=…)")
     })?;
     let data: Vec<IndexPackage> = serde_json::from_str(&index_text)?;
     let entry = data
