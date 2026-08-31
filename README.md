@@ -121,6 +121,35 @@ only during the build; bake the decision into the artifact.
    rewritten via temp-file rename — a failure at any point restores the
    previous state
 
+### The catalog: real distro software
+
+Most packages in the repo wrap **the real binaries your distro already
+ships** (`/usr/bin/rg`, `/usr/bin/nvim`, …) — the forge sandbox has no
+network by design, so ark builds on top of your distro instead of
+replacing it. Recipes verify the distro binary exists at build time and
+refuse cleanly (nothing installed) if it doesn't. USE flags bake real
+behavior into the wrapper:
+
+- `ark forge ripgrep --flags smart` → `rg --smart-case`
+- `ark forge fd --flags hidden,noignore` → `fd --hidden --no-ignore-vcs`
+- `ark forge eza --flags git,icons` → `eza --git --icons=auto`
+- `ark forge curl --flags retry` → `curl --retry 3`
+- `ark forge neovim --flags config` → ships a sane `init.vim` in the package
+- `ark forge zsh --flags config` → `ZDOTDIR` points into the package
+
+Catalog: ripgrep, fd, bat, eza, fzf, tree, curl, wget, neovim, vim, nano,
+micro, btop, zsh, starship, jq, unzip, duf, sd (+ the original toy packages).
+
+The **ark-forge extension itself** is installable from the repo's
+`extensions/` directory:
+
+```bash
+ark install ark-forge     # curls it from the index host into ~/.ark/extensions/
+```
+
+(The hardcoded host in its `installation_command` follows wherever you
+publish the repo — swap the URL when you host it.)
+
 ## Extensions
 
 Any executable named `ark-<name>` in `~/.ark/extensions/` becomes a subcommand: `ark <name> ...` gets dispatched to it with the remaining arguments. `ark-forge` (built from this repo, see above) is the flagship.

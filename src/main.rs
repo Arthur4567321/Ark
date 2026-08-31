@@ -99,8 +99,11 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
 
     let data: Vec<Package> = response.json()?; // json() returns a Result, needs `?`
 
-    // find() returns an Option -> unwrap it; structs use .name, not ["name"]
-    let result = data.iter().find(|item| item.name == package).unwrap();
+    // find() returns an Option -> a missing package is a clean error, not a panic
+    let result = data
+        .iter()
+        .find(|item| item.name == package)
+        .ok_or_else(|| format!("no package named '{package}' in the index"))?;
 
     // install dependencies first (skipping ones already installed).
     // `for dep in &result.depends` is all the iteration you need — no
