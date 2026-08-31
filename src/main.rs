@@ -139,6 +139,9 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
         Err(_) => Vec::new(),
     };
 
+    // re-installing replaces the record instead of duplicating it
+    installed_packages.retain(|p| p.name != result.name);
+
     installed_packages.push(Package {
         name: result.name.clone(), // missing commas added
         version: result.version,
