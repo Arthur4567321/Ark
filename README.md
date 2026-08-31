@@ -5,6 +5,11 @@ extension: **`ark forge`**. Every package is a customizable PKGBUILD recipe;
 USE flags change how it builds, the build runs in a sandbox, and the install is
 transactional — ark refuses to leave you in a broken state.
 
+This repository contains **only the manager itself**. The package repository
+lives separately in `~/ark-repo` (see below) — the manager's code and the
+packages it ships never mix, like pacman vs. its mirrors or portage vs. the
+ebuild repo.
+
 ## Build
 
 ```bash
@@ -21,49 +26,27 @@ mkdir -p ~/.ark/extensions
 cp target/release/ark-forge ~/.ark/extensions/ark-forge
 ```
 
-## Hosting on GitHub
+## The package repository (`~/ark-repo`)
 
-The CLI and the emerge extension fetch the index from GitHub raw by default:
+A standalone directory, its own git repo, intentionally outside this project:
 
 ```
-https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/packages.json
+~/ark-repo
+├── packages.json        # the index the CLI downloads
+├── index.html           # searchable web catalog (USE-flag chips, recipe links)
+├── pkgs/
+│   └── <name>/PKGBUILD  # one Arch-style recipe per package
+└── extensions/          # installable extensions (e.g. the legacy ark-emerge)
 ```
-
-To publish (from the repo root):
-
-```bash
-gh repo create Arthur4567321/Ark --public --source=. --push   # or create it on github.com and:
-# git remote add origin git@github.com:Arthur4567321/Ark.git
-# git push -u origin main
-```
-
-Once pushed, anyone can install packages with no local server running — the
-`emerge` extension itself is installed the same way (`ark install emerge`
-downloads it from the same repo). Override the index location anytime with:
-
-```bash
-ARK_INDEX_URL=http://localhost:8000/packages.json ark list   # local testing
-```
-
-Note: `raw.githubusercontent.com` caches files for ~5 minutes — newly pushed
-index changes may take a few minutes to appear.
-
-## Repository web page
-
-The `web/` directory is the package repository:
-
-- `index.html` — searchable web page that renders the package catalog
-- `packages.json` — the JSON index the CLI downloads (includes `installation_command` per package)
 
 Serve it locally:
 
 ```bash
-cd web
-python3 -m http.server 8000
-# then open http://localhost:8000
+python3 -m http.server 8000 --directory ~/ark-repo
 ```
 
-The CLI fetches `http://localhost:8000/packages.json` (see `INDEX_URL` in `src/main.rs` — change it to your real hosted URL).
+Or publish it as its own git repo and point ark at the raw URL (override with
+`ARK_INDEX_URL`, or edit `INDEX_URL` in `src/main.rs`).
 
 ## Usage
 
@@ -88,10 +71,17 @@ ark forge hello                                  # build with your configured fl
 ark forge hello --flags minimal                  # one-shot flags
 ark forge hello-gentoo --flags color,fancy,quotes
 ark forge hello --show-flags                     # declared + effective flags
-ark forge ./web/pkgs/hello                       # build from a local recipe dir
+ark forge ~/ark-repo/pkgs/hello                  # build from an explicit recipe dir
 ark forge hello --no-sandbox                     # escape hatch (loud + dangerous)
 ark forge hello --keep-staging                   # debugging aid
 ```
+
+### Recipe lookup order
+
+1. **`~/.ark/pkgs/<name>/PKGBUILD`** — your personal overlay; wins over the
+   repo, perfect for hacking on a recipe without touching any git
+2. an explicit directory argument containing a `PKGBUILD`
+3. the recipe URL published in the index
 
 ### Flag layering (most specific wins)
 

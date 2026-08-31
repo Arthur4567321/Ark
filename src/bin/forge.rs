@@ -105,7 +105,7 @@ fn http_get(url: &str) -> Result<String, Box<dyn Error>> {
 
 fn download_recipe(index_url: &str, pkg: &str) -> Result<(String, String), Box<dyn Error>> {
     let index_text = http_get(index_url).map_err(|e| {
-        format!("can't reach index at {index_url} ({e})\n  hint: cd web && python3 -m http.server 8000")
+        format!("can't reach index at {index_url} ({e})\n  hint: python3 -m http.server 8000 --directory ~/ark-repo")
     })?;
     let data: Vec<IndexPackage> = serde_json::from_str(&index_text)?;
     let entry = data
@@ -452,10 +452,16 @@ fn commit(
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
-    // 1. get the recipe (local dir or from the index)
+    // 1. get the recipe: personal overlay (~/.ark/pkgs) → local dir → index
     let local_dir = PathBuf::from(&cli.package);
-    let (recipe_text, origin) = if local_dir.join("PKGBUILD").exists() {
-        (fs::read_to_string(local_dir.join("PKGBUILD"))?, format!("{}", local_dir.display()))
+    let overlay = expand_tilde(&format!("~/.ark/pkgs/{}/PKGBUILD", cli.package));
+    let (recipe_text, origin) = if valid_name(&cli.package) && overlay.exists() {
+        (
+            fs::read_to_string(&overlay)?,
+            format!("{} (personal overlay — overrides the repo)", overlay.display()),
+        )
+    } else if local_dir.join("PKGBUILD").exists() {
+        (fs::read_to_string(local_dir.join("PKGBUILD"))?, format!("{} (local dir)", local_dir.display()))
     } else {
         let index_url = cli
             .index
