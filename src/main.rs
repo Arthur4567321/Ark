@@ -79,6 +79,8 @@ struct Package {
     path: String,
     installation_command: String,
     #[serde(default)]
+    depends: Vec<String>,
+    #[serde(default)]
     bin: String,
 }
 
@@ -100,6 +102,22 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
     // find() returns an Option -> unwrap it; structs use .name, not ["name"]
     let result = data.iter().find(|item| item.name == package).unwrap();
 
+    // install dependencies first (skipping ones already installed).
+    // `for dep in &result.depends` is all the iteration you need — no
+    // manual counter, no get()/match; clone() turns &String into String
+    for dependency in &result.depends {
+        let already_installed = fs::read_to_string(expand_tilde(LIST_PATH))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Vec<Package>>(&text).ok())
+            .unwrap_or_default()
+            .iter()
+            .any(|p| p.name == *dependency);
+
+        if !already_installed {
+            println!("Installing dependency: {dependency}");
+            install_package(dependency.clone())?;
+        }
+    }
     // .status() actually runs the command and checks the exit code
     Command::new("bash")
         .arg("-c")
@@ -124,6 +142,7 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
         installed: true,
         path: result.path.clone(),
         installation_command: result.installation_command.clone(),
+        depends: result.depends.clone(),
         bin: linked,
     }); // missing semicolon added
 

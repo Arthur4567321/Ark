@@ -1,0 +1,535 @@
+#!/usr/bin/env python3
+"""ark emerge — Gentoo-style USE flags with Debian-grade safety.
+
+An Ark extension. Invoked as:  ark emerge <command> [options] [+flag -flag]
+
+Gentoo flavour : USE flags, world file, --pretend, --oneshot, emerge-style output
+Debian safety  : dpkg-style lock, atomic writes, snapshots, trash-not-delete,
+                 rollback, and refusal to remove packages others depend on
+"""
+import argparse
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+import urllib.error
+
+INDEX_URL = os.environ.get(
+    "ARK_INDEX_URL",
+    "https://raw.githubusercontent.com/Arthur4567321/Ark/main/web/packages.json")
+HOME = os.path.expanduser("~")
+ARK_DIR = os.path.join(HOME, ".ark")
+DB = os.path.join(ARK_DIR, "list.json")              # shared with the ark core
+EMERGE_DIR = os.path.join(ARK_DIR, "emerge")
+WORLD = os.path.join(EMERGE_DIR, "world")            # explicit installs (Gentoo)
+FLAGS_DIR = os.path.join(EMERGE_DIR, "package.use")  # per-package USE flags
+BACKUPS = os.path.join(EMERGE_DIR, "backups")
+LOCK = os.path.join(EMERGE_DIR, "lock")
+KEEP_BACKUPS = 5
+
+TTY = sys.stdout.isatty()
+
+# ---------------------------------------------------------------- output ---
+
+def paint(color, tag, msg):
+    if TTY:
+        return f"\033[{color}m[{tag}]\033[0m {msg}"
+    return f"[{tag}] {msg}"
+
+def ok(msg):
+    print(paint("32", " ok ", msg))
+
+def warn(msg):
+    print(paint("33", "warn", msg), file=sys.stderr)
+
+def err(msg):
+    print(paint("31", " !! ", msg), file=sys.stderr)
+
+def die(msg, code=1):
+    err(msg)
+    sys.exit(code)
+
+# ----------------------------------------------------------------- state ---
+
+class Lock:
+    """dpkg-style exclusive lock: never two emerge runs at once."""
+    def __enter__(self):
+        os.makedirs(EMERGE_DIR, exist_ok=True)
+        self.fh = open(LOCK, "w")
+        try:
+            fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            die("cannot acquire lock (~/.ark/emerge/lock): "
+                "another 'ark emerge' is already running")
+        return self
+    def __exit__(self, *exc):
+        self.fh.close()
+
+def atomic_write(path, text):
+    """temp file + rename: readers never see a half-written file."""
+    os.makedirs(os.path.dirname(os.path.expanduser(path)) or ".", exist_ok=True)
+    path = os.path.expanduser(path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+def load_db():
+    try:
+        with open(os.path.expanduser(DB)) as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return []
+
+def save_db(packages):
+    atomic_write(DB, json.dumps(packages, indent=2) + "\n")
+
+def load_world():
+    try:
+        with open(WORLD) as fh:
+            return [l.strip() for l in fh if l.strip()]
+    except FileNotFoundError:
+        return []
+
+def save_world(names):
+    atomic_write(WORLD, "".join(n + "\n" for n in dict.fromkeys(names)))
+
+def fetch_index():
+    try:
+        with urllib.request.urlopen(INDEX_URL, timeout=10) as resp:
+            return json.load(resp)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        die(f"cannot fetch package index at {INDEX_URL}: {e}")
+
+def find_pkg(index, name):
+    return next((p for p in index if p["name"] == name), None)
+
+# --------------------------------------------------------------- safety ----
+
+class Snapshot:
+    """Backup of db/world/flags before any change; enables rollback."""
+    def __init__(self, tag):
+        os.makedirs(BACKUPS, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.dir = os.path.join(BACKUPS, f"{stamp}-{tag}")
+        for attempt in range(100):
+            if not os.path.exists(self.dir):
+                break
+            self.dir = os.path.join(BACKUPS, f"{stamp}-{tag}-{attempt}")
+        os.makedirs(self.dir)
+        self.manifest = {"tag": tag, "time": stamp, "created": [], "removed": []}
+        db = os.path.expanduser(DB)
+        if os.path.exists(db):
+            shutil.copy2(db, os.path.join(self.dir, "list.json"))
+        if os.path.exists(WORLD):
+            shutil.copy2(WORLD, os.path.join(self.dir, "world"))
+        if os.path.isdir(FLAGS_DIR):
+            shutil.copytree(FLAGS_DIR, os.path.join(self.dir, "package.use"))
+        self._write_manifest()
+
+    def _write_manifest(self):
+        with open(os.path.join(self.dir, "manifest.json"), "w") as fh:
+            json.dump(self.manifest, fh, indent=2)
+
+    def note_created(self, path):
+        self.manifest["created"].append(path)
+        self._write_manifest()
+
+    def note_removed(self, path, trash):
+        self.manifest["removed"].append({"path": path, "trash": trash})
+        self._write_manifest()
+
+def prune_backups():
+    if not os.path.isdir(BACKUPS):
+        return
+    dirs = sorted(d for d in os.listdir(BACKUPS))
+    for old in dirs[:-KEEP_BACKUPS]:
+        shutil.rmtree(os.path.join(BACKUPS, old), ignore_errors=True)
+
+def rollback_latest(auto=False):
+    if not os.path.isdir(BACKUPS):
+        die("nothing to roll back (no snapshots)")
+    dirs = sorted(os.listdir(BACKUPS))
+    latest = os.path.join(BACKUPS, dirs[-1])
+    with open(os.path.join(latest, "manifest.json")) as fh:
+        man = json.load(fh)
+    for entry in man["removed"]:                    # restore trashed files
+        if os.path.exists(entry["trash"]):
+            os.makedirs(os.path.dirname(entry["path"]), exist_ok=True)
+            shutil.move(entry["trash"], entry["path"])
+    for path in man["created"]:                     # undo created files
+        p = os.path.expanduser(path)
+        if os.path.exists(p):
+            shutil.rmtree(p, ignore_errors=True)
+    for name, target in (("list.json", DB), ("world", WORLD)):
+        src = os.path.join(latest, name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.expanduser(target))
+        else:
+            try:
+                os.remove(os.path.expanduser(target))
+            except FileNotFoundError:
+                pass
+    src = os.path.join(latest, "package.use")
+    if os.path.isdir(src):
+        shutil.rmtree(FLAGS_DIR, ignore_errors=True)
+        shutil.copytree(src, FLAGS_DIR)
+    # re-expose commands for restored packages (best effort)
+    for p in load_db():
+        for n in (p.get("bin") or "").split(","):
+            if n:
+                src_path = os.path.join(os.path.expanduser(p["path"]), n)
+                dest = os.path.join(HOME, ".local", "bin", n)
+                if os.path.exists(src_path):
+                    try:
+                        os.remove(dest)
+                    except FileNotFoundError:
+                        pass
+                    os.symlink(src_path, dest)
+    shutil.rmtree(latest)
+    ok(f"rolled back '{man['tag']}' ({man['time']})"
+       + (" — automatic, after a failed operation" if auto else ""))
+
+# ---------------------------------------------------------------- logic ----
+
+def parse_flags(raw):
+    return [f for f in raw if f.startswith(("+", "-"))]
+
+def validate_flags(pkg, flags, quiet):
+    known = pkg.get("use_flags", [])
+    for f in flags:
+        if f.lstrip("+-") not in known and not quiet:
+            warn(f"USE flag '{f}' is not known for {pkg['name']} "
+                 f"(known: {', '.join(known) or 'none'})")
+
+def use_file(pkg):
+    return os.path.join(FLAGS_DIR, pkg["name"])
+
+def write_flags(pkg, flags):
+    if flags:
+        atomic_write(use_file(pkg), " ".join(flags) + "\n")
+
+def plan_deps(index, pkg):
+    """missing dependencies (recursively), Gentoo-style: deps first."""
+    db = {p["name"]: p for p in load_db()}
+    ordered, seen = [], set()
+    def walk(p):
+        for dep in p.get("depends", []):
+            if dep in seen:
+                continue
+            seen.add(dep)
+            dep_pkg = find_pkg(index, dep)
+            if dep_pkg is None:
+                die(f"dependency '{dep}' of {p['name']} not in index")
+            if dep not in db:
+                walk(dep_pkg)
+                ordered.append(dep_pkg)
+    walk(pkg)
+    return ordered
+
+def run_install_command(pkg, flags, quiet):
+    use = " ".join(flags)
+    env = dict(os.environ, USE=use)
+    result = subprocess.run(
+        pkg["installation_command"], shell=True, env=env,
+        capture_output=quiet, text=True)
+    if result.returncode != 0:
+        if quiet and result.stderr:
+            err(result.stderr.strip())
+        raise RuntimeError(
+            f"installation command for {pkg['name']} failed "
+            f"(status {result.returncode})")
+
+def link_commands(pkg):
+    """Expose a package's executables as commands in ~/.local/bin (on PATH)."""
+    bin_dir = os.path.join(HOME, ".local", "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    root = os.path.expanduser(pkg["path"])
+    if pkg.get("bin"):
+        names = [n.strip() for n in pkg["bin"].split(",") if n.strip()]
+    else:
+        names = [e for e in sorted(os.listdir(root))
+                 if os.path.isfile(os.path.join(root, e))
+                 and os.access(os.path.join(root, e), os.X_OK)]
+    for n in names:
+        dest = os.path.join(bin_dir, n)
+        try:
+            os.remove(dest)
+        except FileNotFoundError:
+            pass
+        os.symlink(os.path.join(root, n), dest)
+    return ",".join(names)
+
+def do_install(index, pkg, flags, oneshot, quiet):
+    snap = Snapshot(f"install-{pkg['name']}")
+    write_flags(pkg, flags)
+    validate_flags(pkg, flags, quiet)
+    bins = ""
+    try:
+        run_install_command(pkg, flags, quiet)
+        bins = link_commands(pkg)
+        db = [p for p in load_db() if p["name"] != pkg["name"]]
+        db.append({"name": pkg["name"], "version": pkg["version"],
+                   "installed": True, "path": pkg["path"],
+                   "installation_command": pkg["installation_command"],
+                   "bin": bins})
+        save_db(db)
+        if oneshot:
+            save_world([n for n in load_world() if n != pkg["name"]])
+        else:
+            save_world(load_world() + [pkg["name"]])
+    except Exception as e:
+        rollback_latest(auto=True)
+        die(f"install of {pkg['name']} aborted: {e}")
+    snap.note_created(pkg["path"])
+    prune_backups()
+    ok(f"{pkg['name']}-{pkg['version']} installed → {pkg['path']}"
+       + (f'  USE="{use_str(flags)}"' if flags else ""))
+    if bins:
+        ok(f"commands now available: {bins}")
+
+def use_str(flags):
+    return " ".join(flags)
+
+def reverse_blockers(index, name):
+    """installed packages that depend on `name` (Debian refuses removal)."""
+    blockers = []
+    for inst in load_db():
+        if inst["name"] == name:
+            continue
+        pkg = find_pkg(index, inst["name"])
+        if pkg and name in pkg.get("depends", []):
+            blockers.append(f"{inst['name']}-{inst['version']}")
+    return blockers
+
+# ------------------------------------------------------------- commands ----
+
+def cmd_install(args):
+    with Lock():
+        index = fetch_index()
+        pkg = find_pkg(index, args.package)
+        if pkg is None:
+            die(f"package '{args.package}' not in index")
+        flags = parse_flags(args.args) + parse_flags(args.use.split())
+        deps = plan_deps(index, pkg)
+
+        print(f"\n[ebuild  N    ] {pkg['name']}-{pkg['version']}"
+              + (f'  USE="{use_str(flags)}"' if flags else ""))
+        for d in deps:
+            print(f"[ebuild  N    ] {d['name']}-{d['version']}  (dependency)")
+        if args.pretend:
+            ok("pretend: nothing done")
+            return
+        if args.ask and input("Proceed? [y/N] ").strip().lower() != "y":
+            die("aborted by user")
+
+        for d in deps:                      # dependencies are oneshot
+            do_install(index, d, [], oneshot=True, quiet=args.quiet)
+        do_install(index, pkg, flags, oneshot=args.oneshot, quiet=args.quiet)
+
+def cmd_remove(args):
+    with Lock():
+        index = fetch_index()
+        inst = next((p for p in load_db() if p["name"] == args.package), None)
+        if inst is None:
+            die(f"package '{args.package}' is not installed")
+        blockers = reverse_blockers(index, args.package)
+        if blockers and not args.force:
+            err(f"refusing to remove '{args.package}'")
+            err("it is required by installed packages:")
+            for b in blockers:
+                err(f"  {b}")
+            die("use --force to override (not recommended)")
+        print(f"[uninstall    ] {inst['name']}-{inst['version']}"
+              + (f"  (forced, {len(blockers)} dependent(s))"
+                 if blockers else ""))
+        if args.pretend:
+            ok("pretend: nothing done")
+            return
+        snap = Snapshot(f"remove-{inst['name']}")
+        path = os.path.expanduser(inst["path"])
+        trash = os.path.join(snap.dir, f"trash-{inst['name']}")
+        if os.path.exists(path):
+            shutil.move(path, trash)        # trash, never destroy (Debian)
+            snap.note_removed(path, trash)
+        for n in (inst.get("bin") or "").split(","):
+            if n:                           # drop exposed commands
+                try:
+                    os.remove(os.path.join(HOME, ".local", "bin", n))
+                except FileNotFoundError:
+                    pass
+        save_db([p for p in load_db() if p["name"] != inst["name"]])
+        save_world([n for n in load_world() if n != inst["name"]])
+        prune_backups()
+        ok(f"{inst['name']}-{inst['version']} removed "
+           f"(recoverable via 'ark emerge rollback')")
+
+def cmd_update(args):
+    with Lock():
+        index = fetch_index()
+        db = {p["name"]: p for p in load_db()}
+        world = load_world()
+        if not world:
+            ok("world file is empty — nothing to update")
+            return
+        # world packages plus everything they depend on (Gentoo -u world)
+        targets, seen = [], set()
+        def walk(name):
+            if name in seen:
+                return
+            seen.add(name)
+            pkg = find_pkg(index, name)
+            if pkg is None:
+                warn(f"{name} vanished from the index, skipping")
+                return
+            targets.append(pkg)
+            for dep in pkg.get("depends", []):
+                walk(dep)
+        for name in world:
+            walk(name)
+
+        outdated = [p for p in targets
+                    if p["name"] in db and p["version"] > db[p["name"]]["version"]]
+        if not outdated:
+            ok("world is up to date")
+            return
+        for p in outdated:
+            old = db[p["name"]]["version"]
+            print(f"[update  U    ] {p['name']}-{old} → {p['version']}")
+        if args.pretend:
+            ok("pretend: nothing done")
+            return
+        if args.ask and input("Proceed? [y/N] ").strip().lower() != "y":
+            die("aborted by user")
+        for p in outdated:                  # install command overwrites in place
+            do_install(index, p, [], oneshot=True, quiet=args.quiet)
+
+def cmd_list(_args):
+    db = load_db()
+    if not db:
+        ok("no packages installed")
+        return
+    print(f"{'NAME':<16} {'VER':>4}  USE")
+    for p in db:
+        try:
+            with open(use_file(p)) as fh:
+                flags = fh.read().strip()
+        except FileNotFoundError:
+            flags = ""
+        print(f"{p['name']:<16} {p['version']:>4}  {flags}")
+
+def cmd_world(_args):
+    world = load_world()
+    ok(", ".join(world) if world else "world is empty")
+
+def cmd_search(args):
+    index = fetch_index()
+    rx = re.compile(args.pattern, re.IGNORECASE)
+    hits = [p for p in index if rx.search(p["name"] + " " + p.get("description", ""))]
+    for p in hits:
+        print(f"[ {p['name']:<14} {p['version']:>3} ]  {p.get('description', '')}")
+    ok(f"{len(hits)} package(s) found")
+
+def cmd_info(args):
+    index = fetch_index()
+    pkg = find_pkg(index, args.package)
+    if pkg is None:
+        die(f"package '{args.package}' not in index")
+    db = {p["name"]: p for p in load_db()}
+    print(f"name          : {pkg['name']}")
+    print(f"version       : {pkg['version']}")
+    print(f"description   : {pkg.get('description', '-')}")
+    print(f"path          : {pkg['path']}")
+    if pkg.get("use_flags"):
+        print(f"use flags     : {', '.join(pkg['use_flags'])}")
+    if pkg.get("depends"):
+        print(f"depends on    : {', '.join(pkg['depends'])}")
+    inst = db.get(pkg["name"])
+    print("installed     : "
+          + (f"yes (v{inst['version']})" if inst else "no"))
+    print(f"in world      : {pkg['name'] in load_world()}")
+
+def cmd_rollback(_args):
+    with Lock():
+        rollback_latest(auto=False)
+
+def cmd_backups(_args):
+    if not os.path.isdir(BACKUPS):
+        ok("no snapshots kept")
+        return
+    for d in sorted(os.listdir(BACKUPS)):
+        with open(os.path.join(BACKUPS, d, "manifest.json")) as fh:
+            man = json.load(fh)
+        print(f"{d}  tag={man['tag']}")
+
+# ------------------------------------------------------------------ cli ----
+
+def main():
+    ap = argparse.ArgumentParser(prog="ark emerge",
+                                 description="Gentoo-style flags, Debian-grade safety")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def common(sp):
+        sp.add_argument("-p", "--pretend", action="store_true",
+                        help="show what would happen, do nothing")
+        sp.add_argument("-a", "--ask", action="store_true",
+                        help="ask for confirmation before proceeding")
+        sp.add_argument("-q", "--quiet", action="store_true",
+                        help="suppress install-command output")
+
+    p = sub.add_parser("install", help="install a package with USE flags")
+    p.add_argument("package")
+    p.add_argument("args", nargs="*", help="USE flags: +enable / -disable")
+    p.add_argument("--use", default="", help='flags as string: "+a,-b"')
+    p.add_argument("-1", "--oneshot", action="store_true",
+                   help="do not record in the world file")
+    common(p)
+    p.set_defaults(fn=cmd_install)
+
+    p = sub.add_parser("remove", help="remove a package (safely)")
+    p.add_argument("package")
+    p.add_argument("--force", action="store_true",
+                   help="override dependency protection (not recommended)")
+    common(p)
+    p.set_defaults(fn=cmd_remove)
+
+    p = sub.add_parser("update", help="update world packages")
+    common(p)
+    p.set_defaults(fn=cmd_update)
+
+    p = sub.add_parser("list", help="list installed packages + flags")
+    p.set_defaults(fn=cmd_list)
+
+    p = sub.add_parser("world", help="show the world file")
+    p.set_defaults(fn=cmd_world)
+
+    p = sub.add_parser("search", help="regex search the index")
+    p.add_argument("pattern")
+    p.set_defaults(fn=cmd_search)
+
+    p = sub.add_parser("info", help="show details for one package")
+    p.add_argument("package")
+    p.set_defaults(fn=cmd_info)
+
+    p = sub.add_parser("rollback", help="undo the last emerge operation")
+    p.set_defaults(fn=cmd_rollback)
+
+    p = sub.add_parser("backups", help="list snapshots")
+    p.set_defaults(fn=cmd_backups)
+
+    args = ap.parse_args()
+    args.fn(args)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        die("interrupted")
