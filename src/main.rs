@@ -124,11 +124,16 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
             install_package(dependency.clone())?;
         }
     }
-    // .status() actually runs the command and checks the exit code
-    Command::new("bash")
+    // .status() runs the command — a failing install must NOT be recorded
+    let install_status = Command::new("bash")
         .arg("-c")
         .arg(&result.installation_command)
         .status()?;
+    if !install_status.success() {
+        return Err(format!(
+            "installation of '{package}' failed ({install_status}) — not recorded"
+        ).into());
+    }
 
     // expose the package's executables as commands (~/.local/bin)
     let linked = link_commands(&result.path, &result.bin);
@@ -167,26 +172,35 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
 }
 
 fn list_packages() {
-    let json_text = fs::read_to_string(expand_tilde(LIST_PATH)).unwrap(); // read_file() doesn't exist
-    let data: Vec<Package> = serde_json::from_str(&json_text).unwrap(); // parse_json() doesn't exist
+    // a fresh machine has no list.json yet — that just means "nothing installed"
+    let data: Vec<Package> = match fs::read_to_string(expand_tilde(LIST_PATH)) {
+        Ok(json_text) => serde_json::from_str(&json_text).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
 
     for item in &data {
         println!("{}", item.name);
     }
 }
 
-fn remove_package(package: String) {
-    let json_text = fs::read_to_string(expand_tilde(LIST_PATH)).unwrap();
-    let data: Vec<Package> = serde_json::from_str(&json_text).unwrap();
+fn remove_package(package: String) -> Result<(), Box<dyn Error>> {
+    let json_text = fs::read_to_string(expand_tilde(LIST_PATH))
+        .map_err(|_| format!("nothing is installed (no {LIST_PATH})"))?;
+    let data: Vec<Package> = serde_json::from_str(&json_text)?;
 
-    let result = data.iter().find(|item| item.name == package).unwrap();
+    let result = data
+        .iter()
+        .find(|item| item.name == package)
+        .ok_or_else(|| format!("'{package}' is not installed"))?;
 
     // bash -c takes ONE command string; "rm" "-rf" path as separate args were ignored
-    Command::new("bash")
+    let remove_status = Command::new("bash")
         .arg("-c")
         .arg(format!("rm -rf {}", result.path))
-        .status()
-        .unwrap();
+        .status()?;
+    if !remove_status.success() {
+        return Err(format!("removing '{package}' failed ({remove_status})").into());
+    }
 
     // drop the commands we exposed in ~/.local/bin
     for name in result.bin.split(',').filter(|s| !s.is_empty()) {
@@ -195,26 +209,33 @@ fn remove_package(package: String) {
 
     // also drop the record from list.json
     let remaining: Vec<Package> = data.into_iter().filter(|item| item.name != package).collect();
-    fs::write(expand_tilde(LIST_PATH), serde_json::to_string_pretty(&remaining).unwrap()).unwrap();
+    fs::write(expand_tilde(LIST_PATH), serde_json::to_string_pretty(&remaining).unwrap())?;
+    Ok(())
 }
 
-fn update_packages() {
-    let response_dataset = reqwest::blocking::get(index_url()).unwrap();
-    let data: Vec<Package> = response_dataset.json().unwrap();
+fn update_packages() -> Result<(), Box<dyn Error>> {
+    let response = reqwest::blocking::get(index_url())?;
+    if !response.status().is_success() {
+        return Err(format!("index fetch failed: {} {}", response.status(), index_url()).into());
+    }
+    let data: Vec<Package> = response.json()?;
 
-    let json_text = fs::read_to_string(expand_tilde(LIST_PATH)).unwrap();
-    let installed_packages: Vec<Package> = serde_json::from_str(&json_text).unwrap();
+    let json_text = fs::read_to_string(expand_tilde(LIST_PATH))
+        .map_err(|_| format!("nothing is installed (no {LIST_PATH})"))?;
+    let installed_packages: Vec<Package> = serde_json::from_str(&json_text)?;
 
     // `for a in x && b in y` is invalid syntax -> nested loops
     for item in &data {
         for package in &installed_packages {
             // compare only matching package names, not every pair
             if (item.version > package.version) && item.name == package.name {
-                remove_package(package.name.clone());
-                install_package(item.name.clone()).unwrap();
+                println!("updating {} {} -> {}", item.name, package.version, item.version);
+                remove_package(package.name.clone())?;
+                install_package(item.name.clone())?;
             }
         }
     }
+    Ok(())
 }
 
 fn run_external_command(name: &str, args: &[String]) -> Result<(), String> {
@@ -245,8 +266,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         // match arms need `,` not `;`
         Commands::Install { package } => install_package(package)?,
         Commands::List => list_packages(),
-        Commands::Update => update_packages(),
-        Commands::Remove { package } => remove_package(package),// argument was missing
+        Commands::Update => update_packages()?,
+        Commands::Remove { package } => remove_package(package)?,// argument was missing
         Commands::External(args) => {
             let name = &args[0];
             let rest = &args[1..];
