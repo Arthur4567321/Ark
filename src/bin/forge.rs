@@ -3,13 +3,16 @@
 // Each package gets an Arch-style PKGBUILD recipe. USE flags selected by the
 // user change how the recipe builds (via `has_flag`). Every build runs inside
 // a sandbox (bubblewrap → unshare → refuse) and is transactional: staged →
-// verified → atomically committed. Any failure leaves the system untouched.
+// verified → atomically committed. Recipes may declare `depends=()`: forge
+// resolves the full tree, installs dependencies first, and if ANY package in
+// the tree fails, everything installed during this run is rolled back.
 //
 // Install as:  ~/.ark/extensions/ark-forge   (ark's external-subcommand hook)
-// Invoke as:   ark forge <package> [--flags a,b] [--no-sandbox] [--show-flags]
+// Invoke as:   ark forge <package> [--flags a,b] [--nodeps] [--show-flags]
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -55,14 +58,14 @@ fn valid_flag(s: &str) -> bool {
 #[command(
     name = "ark-forge",
     version,
-    about = "Forge packages from PKGBUILD recipes: USE flags, sandboxed, transactional.",
+    about = "Forge packages from PKGBUILD recipes: USE flags, dependencies, sandboxed transactional builds.",
     disable_help_subcommand = true
 )]
 struct Cli {
     /// Package name from the index, or a local directory containing a PKGBUILD
     package: String,
 
-    /// Flags for this build (overrides package.flags and arkrc)
+    /// Flags for this build (overrides package.flags and arkrc; applies to the root package only)
     #[arg(long, value_name = "A,B")]
     flags: Option<String>,
 
@@ -77,6 +80,10 @@ struct Cli {
     /// Keep the staging directory after the run (for debugging recipes)
     #[arg(long)]
     keep_staging: bool,
+
+    /// Skip dependency resolution (forge only the named package)
+    #[arg(long)]
+    nodeps: bool,
 
     /// Package index URL (overrides $ARK_INDEX_URL, the same env var core ark uses)
     #[arg(long)]
@@ -134,6 +141,7 @@ struct Meta {
     version: u32,
     flags: Vec<String>,
     provides: Vec<String>,
+    depends: Vec<String>,
 }
 
 fn extract_meta(pbuild: &Path) -> Result<Meta, String> {
@@ -146,6 +154,9 @@ if declare -p flags >/dev/null 2>&1; then
 fi
 if declare -p provides >/dev/null 2>&1; then
     for p in "${provides[@]}"; do printf 'provides=%s\n' "$p"; done
+fi
+if declare -p depends >/dev/null 2>&1; then
+    for d in "${depends[@]}"; do printf 'depends=%s\n' "$d"; done
 fi
 "#;
     let out = Command::new("bash")
@@ -166,6 +177,7 @@ fi
     let mut version = None;
     let mut flags = Vec::new();
     let mut provides = Vec::new();
+    let mut depends = Vec::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Some(v) = line.strip_prefix("pkgname=") {
             name = Some(v.trim().to_string());
@@ -175,13 +187,15 @@ fi
             flags.push(v.trim().to_string());
         } else if let Some(v) = line.strip_prefix("provides=") {
             provides.push(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("depends=") {
+            depends.push(v.trim().to_string());
         }
     }
 
     let name = name.filter(|n| valid_name(n)).ok_or("PKGBUILD must set a valid pkgname")?;
     let version = version
         .ok_or("PKGBUILD pkgver must be a plain unsigned integer (ark's version scheme)")?;
-    Ok(Meta { name, version, flags, provides })
+    Ok(Meta { name, version, flags, provides, depends })
 }
 
 // ---------------------------------------------------------------------------
@@ -372,7 +386,7 @@ fn run_build(staging: &Path, no_sandbox: bool) -> Result<&'static str, String> {
 }
 
 // ---------------------------------------------------------------------------
-// transaction: verify provides → quarantine old → swap → record → clean up
+// list.json + transaction
 
 #[derive(Serialize)]
 struct ListEntry {
@@ -385,21 +399,55 @@ struct ListEntry {
     flags: Vec<String>,
 }
 
-fn update_list(entry: &ListEntry) -> Result<(), String> {
-    let list_path = expand_tilde(LIST_PATH);
-    // serde_json::Value keeps unknown fields of other entries intact
-    let mut items: Vec<serde_json::Value> = match fs::read_to_string(&list_path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("list.json is corrupt: {e}"))?,
+fn read_list() -> Vec<serde_json::Value> {
+    match fs::read_to_string(expand_tilde(LIST_PATH)) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
         Err(_) => Vec::new(),
-    };
-    items.retain(|v| v.get("name").and_then(|n| n.as_str()) != Some(entry.name.as_str()));
-    items.push(serde_json::to_value(entry).map_err(|e| e.to_string())?);
+    }
+}
 
+fn write_list(items: &[serde_json::Value]) -> Result<(), String> {
+    let list_path = expand_tilde(LIST_PATH);
+    if let Some(parent) = list_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
     let tmp = list_path.with_extension("json.new");
-    fs::write(&tmp, serde_json::to_string_pretty(&items).unwrap())
+    fs::write(&tmp, serde_json::to_string_pretty(items).unwrap())
         .map_err(|e| format!("can't write {}: {e}", tmp.display()))?;
     fs::rename(&tmp, &list_path).map_err(|e| format!("atomic rename of list.json failed: {e}"))?;
     Ok(())
+}
+
+fn update_list(entry: &ListEntry) -> Result<(), String> {
+    // serde_json::Value keeps unknown fields of other entries intact
+    let mut items = read_list();
+    items.retain(|v| v.get("name").and_then(|n| n.as_str()) != Some(entry.name.as_str()));
+    items.push(serde_json::to_value(entry).map_err(|e| e.to_string())?);
+    write_list(&items)
+}
+
+/// Rollback helper: uninstall a package (payload to trash, record dropped).
+fn uninstall(name: &str) -> Result<(), String> {
+    let mut items = read_list();
+    let entry = items
+        .iter()
+        .find(|v| v.get("name").and_then(|n| n.as_str()) == Some(name))
+        .ok_or_else(|| format!("'{name}' not in list.json"))?
+        .clone();
+    if let Some(path) = entry.get("path").and_then(|p| p.as_str()) {
+        let dir = expand_tilde(path);
+        if dir.exists() {
+            let trash = expand_tilde(&format!(
+                "~/.ark/trash/rollback.{}/{}",
+                std::process::id(),
+                name
+            ));
+            let _ = fs::create_dir_all(trash.parent().unwrap());
+            fs::rename(&dir, &trash).map_err(|e| format!("can't quarantine {name}: {e}"))?;
+        }
+    }
+    items.retain(|v| v.get("name").and_then(|n| n.as_str()) != Some(name));
+    write_list(&items)
 }
 
 fn commit(
@@ -449,70 +497,116 @@ fn commit(
 }
 
 // ---------------------------------------------------------------------------
+// dependency resolution
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
+struct Resolved {
+    name: String,
+    text: String,
+    origin: String,
+}
 
-    // 1. get the recipe: personal overlay (~/.ark/pkgs) → local dir → index
-    let local_dir = PathBuf::from(&cli.package);
-    let overlay = expand_tilde(&format!("~/.ark/pkgs/{}/PKGBUILD", cli.package));
-    let (recipe_text, origin) = if valid_name(&cli.package) && overlay.exists() {
-        (
+/// Fetch a dependency's recipe: personal overlay first, then the index.
+fn fetch_dep_recipe(
+    dep: &str,
+    parent: &str,
+    index_url: &str,
+) -> Result<(String, String), Box<dyn Error>> {
+    let overlay = expand_tilde(&format!("~/.ark/pkgs/{dep}/PKGBUILD"));
+    if valid_name(dep) && overlay.exists() {
+        return Ok((
             fs::read_to_string(&overlay)?,
-            format!("{} (personal overlay — overrides the repo)", overlay.display()),
-        )
-    } else if local_dir.join("PKGBUILD").exists() {
-        (fs::read_to_string(local_dir.join("PKGBUILD"))?, format!("{} (local dir)", local_dir.display()))
-    } else {
-        let index_url = cli
-            .index
-            .clone()
-            .or_else(|| std::env::var("ARK_INDEX_URL").ok())
-            .unwrap_or_else(|| DEFAULT_INDEX.to_string());
-        let (text, url) = download_recipe(&index_url, &cli.package)?;
-        (text, url)
-    };
+            format!("{} (personal overlay of dependency)", overlay.display()),
+        ));
+    }
+    download_recipe(index_url, dep).map_err(|e| {
+        format!("dependency '{dep}' of '{parent}' could not be resolved: {e}").into()
+    })
+}
 
-    // 2. staging area: ~/.ark/staging/<pkg>.<pid>/{work,root}
-    let staging = expand_tilde(&format!("~/.ark/staging/stage.{}", std::process::id()));
+/// Depth-first post-order: dependencies land in `chain` before dependents.
+fn resolve_closure(
+    name: &str,
+    text: String,
+    origin: String,
+    chain: &mut Vec<Resolved>,
+    stack: &mut Vec<String>,
+    done: &mut HashSet<String>,
+    installed: &HashSet<String>,
+    nodeps: bool,
+    index_url: &str,
+) -> Result<(), Box<dyn Error>> {
+    if done.contains(name) {
+        return Ok(());
+    }
+    if let Some(i) = stack.iter().position(|n| n == name) {
+        let cycle: Vec<String> = stack[i..].to_vec();
+        return Err(format!("dependency cycle detected: {} -> {}", cycle.join(" -> "), name).into());
+    }
+
+    let meta = extract_meta(Path::new(&{
+        // write to a scratch file so bash can source it
+        let tmp = expand_tilde(&format!("~/.ark/staging/meta.{}.{}", std::process::id(), name));
+        if let Some(parent) = tmp.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(&tmp, &text)?;
+        tmp
+    }))
+    .map_err(|e| format!("recipe {origin}: {e}"))?;
+
+    stack.push(name.to_string());
+    if !nodeps {
+        for dep in &meta.depends {
+            if installed.contains(dep) && dep != name {
+                continue; // already installed — skip (versions: not constrained, ark keeps it simple)
+            }
+            let (dep_text, dep_origin) = fetch_dep_recipe(dep, name, index_url)?;
+            resolve_closure(dep, dep_text, dep_origin, chain, stack, done, installed, nodeps, index_url)?;
+        }
+    }
+    stack.pop();
+
+    chain.push(Resolved { name: name.to_string(), text, origin });
+    done.insert(name.to_string());
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// forging one package (the transaction)
+
+fn forge_one(
+    recipe_text: &str,
+    origin: &str,
+    cli_flags: Option<&String>,
+    no_sandbox: bool,
+    keep_staging: bool,
+) -> Result<String, Box<dyn Error>> {
+    // staging area: ~/.ark/staging/<pid>/<n>/{work,root}
+    let staging = expand_tilde(&format!("~/.ark/staging/forge.{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(staging.join("work"))?;
     fs::create_dir_all(staging.join("root"))?;
-    fs::write(staging.join("PKGBUILD"), &recipe_text)?;
+    fs::write(staging.join("PKGBUILD"), recipe_text)?;
 
-    // 3. read metadata + resolve flags (layered)
-    let meta = extract_meta(&staging.join("PKGBUILD")).map_err(|e| {
-        let _ = fs::remove_dir_all(&staging);
-        format!("recipe {origin}: {e}")
-    })?;
-    let flags = resolve_flags(&meta.name, &meta.flags, &cli.flags);
+    let meta = extract_meta(&staging.join("PKGBUILD"))
+        .map_err(|e| -> Box<dyn Error> { format!("recipe {origin}: {e}").into() })?;
+    let flags = resolve_flags(&meta.name, &meta.flags, &cli_flags.cloned());
 
-    if cli.show_flags {
-        println!("declared : {}", if meta.flags.is_empty() { "(none)".into() } else { meta.flags.join(", ") });
-        println!("effective: {}", if flags.is_empty() { "(none)".into() } else { flags.join(", ") });
-        println!("recipe   : {origin}");
-        let _ = fs::remove_dir_all(&staging);
-        return Ok(());
-    }
+    println!("forge {} {} (flags: [{}]) ← {origin}", meta.name, meta.version, flags.join(","));
 
-    println!("forge {} {} (flags: [{}])", meta.name, meta.version, flags.join(","));
-    println!("recipe   : {origin}");
-    println!("staging  : {}", staging.display());
-
-    // 4. run the build inside the sandbox
     fs::write(staging.join("runner.sh"), runner_script(&meta.name, &flags))?;
-    let sandbox = match run_build(&staging, cli.no_sandbox) {
+    let sandbox = match run_build(&staging, no_sandbox) {
         Ok(s) => s,
         Err(e) => {
-            if !cli.keep_staging {
+            if !keep_staging {
                 let _ = fs::remove_dir_all(&staging);
             }
             return Err(e.into());
         }
     };
-    println!("sandbox  : {sandbox}");
+    println!("  sandbox: {sandbox}");
 
-    // 5. verify: every `provides` entry must exist in the payload
+    // verify: every `provides` entry must exist in the payload
     let root = staging.join("root");
     for artifact in &meta.provides {
         if !root.join(artifact).exists() {
@@ -524,22 +618,130 @@ fn main() -> Result<(), Box<dyn Error>> {
             ).into());
         }
     }
-    if !meta.provides.is_empty() {
-        println!("verified : {} artifact(s)", meta.provides.len());
+
+    let final_dir = expand_tilde(&format!("~/.ark/packages/{}", meta.name));
+    commit(&meta, &flags, &final_dir, &root, &staging, keep_staging)
+        .map_err(|e| -> Box<dyn Error> { format!("{e}\nark forge: FAILED — system state unchanged").into() })?;
+
+    Ok(meta.name)
+}
+
+// ---------------------------------------------------------------------------
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let cli = Cli::parse();
+    let index_url = cli
+        .index
+        .clone()
+        .or_else(|| std::env::var("ARK_INDEX_URL").ok())
+        .unwrap_or_else(|| DEFAULT_INDEX.to_string());
+
+    // 1. root recipe: explicit dir > personal overlay > index
+    let local_dir = PathBuf::from(&cli.package);
+    let overlay = expand_tilde(&format!("~/.ark/pkgs/{}/PKGBUILD", cli.package));
+    let (recipe_text, origin) = if local_dir.join("PKGBUILD").exists() {
+        (fs::read_to_string(local_dir.join("PKGBUILD"))?, format!("{} (local dir)", local_dir.display()))
+    } else if valid_name(&cli.package) && overlay.exists() {
+        (
+            fs::read_to_string(&overlay)?,
+            format!("{} (personal overlay — overrides the repo)", overlay.display()),
+        )
+    } else {
+        let (text, url) = download_recipe(&index_url, &cli.package)?;
+        (text, url)
+    };
+
+    // 2. resolve the dependency tree (post-order: deps first)
+    let installed: HashSet<String> = read_list()
+        .iter()
+        .filter_map(|v| v.get("name").and_then(|n| n.as_str()).map(String::from))
+        .collect();
+    let root_meta_tmp = expand_tilde(&format!("~/.ark/staging/meta.root.{}", std::process::id()));
+    if let Some(parent) = root_meta_tmp.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(&root_meta_tmp, &recipe_text)?;
+    let root_name = extract_meta(&root_meta_tmp)
+        .map_err(|e| format!("recipe {origin}: {e}"))?
+        .name;
+    let _ = fs::remove_file(&root_meta_tmp);
+
+    let mut chain: Vec<Resolved> = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut done: HashSet<String> = HashSet::new();
+    resolve_closure(
+        &root_name,
+        recipe_text,
+        origin,
+        &mut chain,
+        &mut stack,
+        &mut done,
+        &installed,
+        cli.nodeps,
+        &index_url,
+    )?;
+
+    if cli.show_flags {
+        let root = chain.last().ok_or("empty plan")?;
+        let meta = extract_meta(Path::new(&{
+            let tmp = expand_tilde(&format!("~/.ark/staging/show.{}", std::process::id()));
+            fs::write(&tmp, &root.text)?;
+            tmp
+        }))?;
+        println!("declared : {}", if meta.flags.is_empty() { "(none)".into() } else { meta.flags.join(", ") });
+        println!("effective: {}", {
+            let f = resolve_flags(&meta.name, &meta.flags, &cli.flags);
+            if f.is_empty() { "(none)".into() } else { f.join(", ") }
+        });
+        println!("depends  : {}", if meta.depends.is_empty() { "(none)".into() } else { meta.depends.join(", ") });
+        println!("recipe   : {}", root.origin);
+        return Ok(());
     }
 
-    // 6. commit (or leave everything untouched)
-    let final_dir = expand_tilde(&format!("~/.ark/packages/{}", meta.name));
-    commit(&meta, &flags, &final_dir, &root, &staging, cli.keep_staging)
-        .map_err(|e| -> Box<dyn Error> {
-            let _ = fs::remove_dir_all(&staging);
-            format!("{e}\nark forge: FAILED — system state unchanged").into()
-        })?;
+    if chain.len() > 1 {
+        println!("plan: {} package(s), dependencies first:", chain.len());
+        for (i, r) in chain.iter().enumerate() {
+            println!("  {:>2}. {}", i + 1, r.name);
+        }
+    }
 
-    println!(
-        "forged   : {} → {}",
-        if flags.is_empty() { "ok".into() } else { format!("flags [{}]", flags.join(",")) },
-        final_dir.display()
-    );
+    // 3. forge the whole tree; roll back everything from this run on failure
+    let mut installed_now: Vec<String> = Vec::new();
+    for resolved in &chain {
+        // --flags applies to the ROOT package only; deps use their configured flags
+        let is_root = resolved.name == root_name;
+        match forge_one(
+            &resolved.text,
+            &resolved.origin,
+            if is_root { cli.flags.as_ref() } else { None },
+            cli.no_sandbox,
+            cli.keep_staging,
+        ) {
+            Ok(name) => installed_now.push(name),
+            Err(e) => {
+                eprintln!("ark forge: FAILED at '{}': {e}", resolved.name);
+                if installed_now.is_empty() {
+                    eprintln!("ark forge: system state unchanged");
+                } else {
+                    eprintln!("ark forge: rolling back {} package(s) installed this run…", installed_now.len());
+                    let mut rolled = Vec::new();
+                    for name in installed_now.iter().rev() {
+                        match uninstall(name) {
+                            Ok(()) => rolled.push(name.clone()),
+                            Err(e) => eprintln!("  rollback warning for {name}: {e}"),
+                        }
+                    }
+                    eprintln!("ark forge: rolled back: {}", rolled.join(", "));
+                }
+                return Err("distro forge aborted — system restored to pre-run state".into());
+            }
+        }
+    }
+
+    if installed_now.len() == 1 {
+        println!("forged   : {}", installed_now[0]);
+    } else {
+        println!("forged   : {} package(s): {}", installed_now.len(), installed_now.join(", "));
+    }
     Ok(())
 }

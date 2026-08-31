@@ -111,6 +111,7 @@ Unknown flags are warned about and ignored.
 pkgname=hello
 pkgver=2                    # plain integer, ark's version scheme
 flags=(minimal)             # USE flags this recipe understands
+depends=(libfoo libbar)     # other ark packages, resolved recursively
 provides=(bin/hello)        # artifacts the build MUST produce (verified!)
 
 build() {
@@ -124,6 +125,18 @@ package() {
 Phases (`prepare`, `build`, `package`) are optional and run with `$srcdir` /
 `$pkgdir` set, Arch-style. **Never call `has_flag` at runtime** — flags exist
 only during the build; bake the decision into the artifact.
+
+### Dependencies & meta-packages
+
+`depends=()` makes recipes composable into a distro. Forge resolves the full
+tree (cycle detection included), skips dependencies already installed,
+forges **dependencies first**, and if ANY package in the tree fails, every
+package installed during that run is rolled back — the unbreakable promise
+at distro scale. `--nodeps` skips resolution; `--flags` applies to the root
+package only (deps use their own `~/.ark/package.flags` / arkrc settings).
+
+The proof: `ark forge ark-distro` builds the entire ark distro (base tools +
+Hyprland desktop, ~40 packages) as ONE transaction:
 
 ### The transaction (why ark can't leave you broken)
 
@@ -152,7 +165,12 @@ behavior into the wrapper:
 - `ark forge zsh --flags config` → `ZDOTDIR` points into the package
 
 Catalog: ripgrep, fd, bat, eza, fzf, tree, curl, wget, neovim, vim, nano,
-micro, btop, zsh, starship, jq, unzip, duf, sd (+ the original toy packages).
+micro, btop, zsh, starship, jq, unzip, duf, sd — plus the **Hyprland distro
+stack**: hyprland, hyprctl, hypridle, alacritty, kitty, nautilus, chromium,
+mpv, playerctl, pavucontrol, networkmanager, fuzzel, grim, slurp,
+wl-clipboard, pipewire, wireplumber, brightnessctl, powerprofilesctl, sddm,
+audio-session, session-hyprland — and the metas `desktop-hyprland`,
+`distro-base`, `ark-distro`.
 
 The **ark-forge extension itself** is installable from the repo's
 `extensions/` directory:
