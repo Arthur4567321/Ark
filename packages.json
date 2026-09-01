@@ -1,0 +1,76 @@
+[
+  {
+    "name": "hello",
+    "version": 2,
+    "installed": false,
+    "path": "~/.ark/packages/hello",
+    "installation_command": "ark forge hello",
+    "depends": [],
+    "bin": "hello"
+  },
+  {
+    "name": "cowsay-lite",
+    "version": 4,
+    "installed": false,
+    "path": "~/.ark/packages/cowsay-lite",
+    "installation_command": "ark forge cowsay-lite",
+    "depends": [
+      "fortune-ark"
+    ],
+    "bin": "cowsay"
+  },
+  {
+    "name": "figlet-mini",
+    "version": 3,
+    "installed": false,
+    "path": "~/.ark/packages/figlet-mini",
+    "installation_command": "ark forge figlet-mini",
+    "depends": [],
+    "bin": "figlet"
+  },
+  {
+    "name": "fortune-ark",
+    "version": 3,
+    "installed": false,
+    "path": "~/.ark/packages/fortune-ark",
+    "installation_command": "ark forge fortune-ark",
+    "depends": [],
+    "bin": "fortune"
+  },
+  {
+    "name": "ripgrep",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/ripgrep",
+    "installation_command": "ark forge ripgrep",
+    "depends": [],
+    "bin": "rg"
+  },
+  {
+    "name": "fd",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/fd",
+    "installation_command": "ark forge fd",
+    "depends": [],
+    "bin": "fd"
+  },
+  {
+    "name": "bat",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/bat",
+    "installation_command": "ark forge bat",
+    "depends": [],
+    "bin": "bat"
+  },
+  {
+    "name": "jq",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/jq",
+    "installation_command": "ark forge jq",
+    "depends": [],
+    "bin": "jq"
+  }
+]
