@@ -8,7 +8,7 @@ use std::process::Command;
 
 // Package index — the ark-repo git repository on GitHub (override with ARK_INDEX_URL)
 const INDEX_URL: &str =
-    "https://raw.githubusercontent.com/Arthur4567321/ark-repo/main/packages.json";
+    "https://raw.githubusercontent.com/Arthur4567321/Ark/main/packages.json";
 
 fn index_url() -> String {
     std::env::var("ARK_INDEX_URL").unwrap_or_else(|_| INDEX_URL.to_string())
@@ -78,6 +78,7 @@ struct Package {
     installed: bool,
     path: String,
     installation_command: String,
+    external: Vec<String>,
     #[serde(default)]
     depends: Vec<String>,
     #[serde(default)]
@@ -156,6 +157,7 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
         installed: true,
         path: result.path.clone(),
         installation_command: result.installation_command.clone(),
+        external: [].to_vec(),
         depends: result.depends.clone(),
         bin: linked,
     }); // missing semicolon added
@@ -259,22 +261,21 @@ fn run_external_command(name: &str, args: &[String]) -> Result<(), String> {
     }
     Ok(())
 }
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(),Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
         // match arms need `,` not `;`
-        Commands::Install { package } => install_package(package)?,
-        Commands::List => list_packages(),
-        Commands::Update => update_packages()?,
-        Commands::Remove { package } => remove_package(package)?,// argument was missing
-        Commands::External(args) => {
+        Commands::Install { package } => install_package(package),
+        Commands::List => Ok(list_packages()),
+        Commands::Update => Ok(update_packages()?),
+        Commands::Remove { package } => remove_package(package),// argument was missing
+        Commands::External(args) => Ok({
             let name = &args[0];
             let rest = &args[1..];
-            run_external_command(name, rest)?;
-        }
+            run_external_command(name, rest);
+        })
     };
-
-    
     Ok(())
 }
+
