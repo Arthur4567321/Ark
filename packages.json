@@ -1,180 +1,52 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Installer script for GNU/Linux x86_64
-# Replaces packages.json with a curl-based installer that downloads prebuilt
-# binaries when possible and falls back to the system package manager for
-# packages that typically come from the distro (figlet, cowsay, fortune).
-# Installs packages under: ~/.ark/packages/<name>
-# Symlinks bins to: ~/.local/bin
-
-PKG_DIR="$HOME/.ark/packages"
-BIN_DIR="$HOME/.local/bin"
-mkdir -p "$PKG_DIR" "$BIN_DIR"
-
-has_cmd() { command -v "$1" >/dev/null 2>&1; }
-
-# Download a release asset from GitHub releases by matching a pattern in the
-# asset name. Arguments: owner repo name-pattern out-file
-# Pattern is a grep-compatible regex (case-insensitive recommended).
-download_latest_asset() {
-  local owner=$1 repo=$2 pattern=$3 out=$4
-  echo "Fetching latest release metadata for $owner/$repo ..."
-  local api="https://api.github.com/repos/${owner}/${repo}/releases/latest"
-  local url
-  url=$(curl -sL "$api" \
-    | grep "browser_download_url" \
-    | sed -E 's/.*: "([^"]+)".*/\1/' \
-    | grep -E --color=never "$pattern" \
-    | head -n1)
-  if [ -z "$url" ]; then
-    echo "No matching asset found for pattern '$pattern' in $owner/$repo releases." >&2
-    return 1
-  fi
-  echo "Downloading $url ..."
-  curl -sL "$url" -o "$out"
-}
-
-install_jq() {
-  if has_cmd jq; then
-    echo "jq already installed: $(command -v jq)"
-    return 0
-  fi
-  local dir="$PKG_DIR/jq"
-  mkdir -p "$dir"
-  local out="$dir/jq"
-  echo "Installing jq (official binary) ..."
-  if download_latest_asset "stedolan" "jq" "jq-linux64" "$out"; then
-    chmod +x "$out"
-    ln -sf "$out" "$BIN_DIR/jq"
-    echo "jq installed to $out"
-    return 0
-  fi
-  echo "Failed to download jq via releases; trying apt/dnf/pacman..."
-  install_via_pkgmgr jq || return 1
-}
-
-# Generic installer that downloads a tarball, extracts the requested binary
-# (by name) into the package dir and symlinks it.
-# Arguments: owner repo asset-pattern binary-name package-name
-install_github_binary() {
-  local owner=$1 repo=$2 pattern=$3 binary_name=$4 pkgname=$5
-  if has_cmd "$binary_name"; then
-    echo "$binary_name already installed: $(command -v $binary_name)"
-    return 0
-  fi
-  local dir="$PKG_DIR/$pkgname"
-  mkdir -p "$dir"
-  local tmp
-  tmp=$(mktemp -d)
-  local archive="$tmp/asset"
-  if ! download_latest_asset "$owner" "$repo" "$pattern" "$archive"; then
-    echo "Failed to find or download asset for $owner/$repo (pattern: $pattern)" >&2
-    rm -rf "$tmp"
-    return 1
-  fi
-
-  # Try to extract the binary from common archive formats
-  if file "$archive" | grep -q "XZ compressed" || file "$archive" | grep -q "gzip compressed"; then
-    echo "Extracting archive to find $binary_name ..."
-    tar -xf "$archive" -C "$tmp"
-    # find binary
-    local found
-    found=$(find "$tmp" -type f -name "$binary_name" -perm -111 | head -n1 || true)
-    if [ -z "$found" ]; then
-      # some binaries are inside a bin/ directory
-      found=$(find "$tmp" -type f -path "*/bin/$binary_name" -perm -111 | head -n1 || true)
-    fi
-    if [ -z "$found" ]; then
-      echo "Could not locate $binary_name inside the archive" >&2
-      rm -rf "$tmp"
-      return 1
-    fi
-    cp "$found" "$dir/$binary_name"
-    chmod +x "$dir/$binary_name"
-    ln -sf "$dir/$binary_name" "$BIN_DIR/$binary_name"
-    echo "$binary_name installed to $dir/$binary_name"
-    rm -rf "$tmp"
-    return 0
-  else
-    # Not an archive — treat as a raw binary
-    chmod +x "$archive"
-    mv "$archive" "$dir/$binary_name"
-    ln -sf "$dir/$binary_name" "$BIN_DIR/$binary_name"
-    echo "$binary_name installed to $dir/$binary_name"
-    rm -rf "$tmp"
-    return 0
-  fi
-}
-
-install_via_pkgmgr() {
-  local pkgs=($@)
-  if has_cmd apt-get; then
-    echo "Installing via apt: ${pkgs[*]}"
-    sudo apt-get update && sudo apt-get install -y "${pkgs[@]}"
-    return $?
-  elif has_cmd dnf; then
-    echo "Installing via dnf: ${pkgs[*]}"
-    sudo dnf install -y "${pkgs[@]}"
-    return $?
-  elif has_cmd pacman; then
-    echo "Installing via pacman: ${pkgs[*]}"
-    sudo pacman -Syu --noconfirm "${pkgs[@]}"
-    return $?
-  elif has_cmd apk; then
-    echo "Installing via apk: ${pkgs[*]}"
-    sudo apk add --no-cache "${pkgs[@]}"
-    return $?
-  fi
-  echo "No supported package manager found (apt, dnf, pacman, apk)." >&2
-  return 1
-}
-
-# Installers for specific tools
-install_ripgrep() {
-  install_github_binary "BurntSushi" "ripgrep" "x86_64.*linux" rg ripgrep || true
-}
-
-install_fd() {
-  install_github_binary "sharkdp" "fd" "x86_64.*linux" fd fd || true
-}
-
-install_bat() {
-  install_github_binary "sharkdp" "bat" "x86_64.*linux" bat bat || true
-}
-
-# figlet, cowsay, fortune: prefer distro packages
-install_text_fun() {
-  local want=(figlet cowsay fortune-mod)
-  echo "Installing text fun packages via distro package manager if available..."
-  if install_via_pkgmgr "${want[@]}"; then
-    echo "Text fun packages installed via package manager."
-  else
-    echo "Could not install figlet/cowsay/fortune via package manager. Skipping."
-  fi
-}
-
-# main
-echo "Using package dir: $PKG_DIR"
-
-# Ensure ~/.local/bin is on PATH
-if ! echo "$PATH" | tr ':' '\n' | grep -qx "$BIN_DIR"; then
-  echo "Note: $BIN_DIR is not on PATH. You may want to add 'export PATH=\"$BIN_DIR:\$PATH\"' to your shell rc file."
-fi
-
-install_jq
-install_ripgrep
-install_fd
-install_bat
-install_text_fun
-
-cat <<EOF
-
-Installation complete. Binaries (if installed) have been symlinked into $BIN_DIR.
-To use them immediately, add $BIN_DIR to your PATH, for example:
-
-  echo 'export PATH="$BIN_DIR:\$PATH"' >> ~/.profile
-  source ~/.profile
-
-Run 'which jq rg fd bat' to check which were installed.
-EOF
+[
+  {
+    "name": "jq",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/jq",
+    "installation_command": "mkdir -p ~/.ark/packages/jq; url=https://github.com/stedolan/jq/releases/latest/download/jq-linux64; curl -sL \"$url\" -o ~/.ark/packages/jq/jq && chmod +x ~/.ark/packages/jq/jq",
+    "external": [],
+    "depends": [],
+    "bin": "jq"
+  },
+  {
+    "name": "ripgrep",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/ripgrep",
+    "installation_command": "mkdir -p ~/.ark/packages/ripgrep; tmp=$(mktemp -d); url=$(curl -s https://api.github.com/repos/BurntSushi/ripgrep/releases/latest | grep browser_download_url | grep -E 'x86_64.*linux' | head -n1 | cut -d '\"' -f4); curl -sL \"$url\" -o \"$tmp/asset.tar.gz\"; tar -xzf \"$tmp/asset.tar.gz\" -C \"$tmp\"; binpath=$(find \"$tmp\" -type f -name rg -perm -111 | head -n1); cp \"$binpath\" ~/.ark/packages/ripgrep/rg; chmod +x ~/.ark/packages/ripgrep/rg; rm -rf \"$tmp\"",
+    "external": [],
+    "depends": [],
+    "bin": "rg"
+  },
+  {
+    "name": "fd",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/fd",
+    "installation_command": "mkdir -p ~/.ark/packages/fd; tmp=$(mktemp -d); url=$(curl -s https://api.github.com/repos/sharkdp/fd/releases/latest | grep browser_download_url | grep -E 'x86_64.*linux' | head -n1 | cut -d '\"' -f4); curl -sL \"$url\" -o \"$tmp/asset.tar.gz\"; tar -xzf \"$tmp/asset.tar.gz\" -C \"$tmp\"; binpath=$(find \"$tmp\" -type f -name fd -perm -111 | head -n1); cp \"$binpath\" ~/.ark/packages/fd/fd; chmod +x ~/.ark/packages/fd/fd; rm -rf \"$tmp\"",
+    "external": [],
+    "depends": [],
+    "bin": "fd"
+  },
+  {
+    "name": "bat",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/bat",
+    "installation_command": "mkdir -p ~/.ark/packages/bat; tmp=$(mktemp -d); url=$(curl -s https://api.github.com/repos/sharkdp/bat/releases/latest | grep browser_download_url | grep -E 'x86_64.*linux' | head -n1 | cut -d '\"' -f4); curl -sL \"$url\" -o \"$tmp/asset.tar.gz\"; tar -xzf \"$tmp/asset.tar.gz\" -C \"$tmp\"; binpath=$(find \"$tmp\" -type f -name bat -perm -111 | head -n1); cp \"$binpath\" ~/.ark/packages/bat/bat; chmod +x ~/.ark/packages/bat/bat; rm -rf \"$tmp\"",
+    "external": [],
+    "depends": [],
+    "bin": "bat"
+  },
+  {
+    "name": "text-fun",
+    "version": 1,
+    "installed": false,
+    "path": "~/.ark/packages/text-fun",
+    "installation_command": "mkdir -p ~/.ark/packages/text-fun; if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y figlet cowsay fortune-mod; elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y figlet cowsay fortune-mod; elif command -v pacman >/dev/null 2>&1; then sudo pacman -Syu --noconfirm figlet cowsay fortune-mod; elif command -v apk >/dev/null 2>&1; then sudo apk add --no-cache figlet cowsay fortune-mod; else echo \"No supported package manager found; install figlet/cowsay/fortune manually\" >&2; fi",
+    "external": [],
+    "depends": [],
+    "bin": "figlet,cowsay,fortune"
+  }
+]
