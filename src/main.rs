@@ -107,7 +107,7 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
     let result = data
         .iter()
         .find(|item| item.name == package)
-        .ok_or_else(|| println!("{}",format!("no package named '{package}' in the index")))?;
+        .ok_or_else(|| panic!("package not found in the index"))?;
 
     // install dependencies first (skipping ones already installed).
     // `for dep in &result.depends` is all the iteration you need — no
@@ -125,8 +125,7 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
             install_package(dependency.clone())?;
         }
     }
-    // .status() runs the command — a
-    failing install must NOT be recorded
+    // .status() runs the command — failing install must NOT be recorded
     let install_status = Command::new("bash")
         .arg("-c")
         .arg(&result.installation_command)
@@ -195,7 +194,7 @@ fn remove_package(package: String) -> Result<(), Box<dyn Error>> {
     let result = data
         .iter()
         .find(|item| item.name == package)
-        .ok_or_else(|| println!("{}",format!("'{package}' is not installed")))?;
+        .ok_or_else(|| panic!("package is not installed"))?;
 
     // bash -c takes ONE command string; "rm" "-rf" path as separate args were ignored
     let remove_status = Command::new("bash")
@@ -280,4 +279,3 @@ fn main() -> Result<(),Box<dyn Error>> {
     };
     Ok(())
 }
-
