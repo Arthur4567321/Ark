@@ -1,225 +1,246 @@
-# Ark 📦
+# Ark
 
-A tiny Rust package manager driven by a web-hosted JSON index — with a defining
-extension: **`ark forge`**. Every package is a customizable PKGBUILD recipe;
-USE flags change how it builds, the build runs in a sandbox, and the install is
-transactional — ark refuses to leave you in a broken state.
+**Ark** is a small, extensible package manager written in Rust.
 
-This repository contains **only the manager itself**. The package repository
-lives separately in `~/ark-repo` (see below) — the manager's code and the
-packages it ships never mix, like pacman vs. its mirrors or portage vs. the
-ebuild repo.
+Ark keeps its core deliberately simple. Additional functionality is provided through **extensions**, which are standalone programs that can be written in **any language**.
 
-## Build
+Ark does not require extensions to use Rust, Clap, or any particular framework. It simply discovers and executes an extension, passing along the arguments provided by the user.
 
-```bash
-cargo build --release
-```
+## Features
 
-This produces two binaries:
+* 🦀 Written in Rust
+* 📦 Small and lightweight package manager
+* 🧩 Extensible through external programs
+* 🌐 Extensions can be written in any language
+* ⚡ Simple argument-based extension interface
+* 🛠️ CLI powered by [`clap`](https://docs.rs/clap)
+* 🎯 Minimal core with functionality provided by extensions
 
-- `ark` — the core CLI
-- `ark-forge` — the forge extension; install it with:
+## Installation
 
-```bash
-mkdir -p ~/.ark/extensions
-cp target/release/ark-forge ~/.ark/extensions/ark-forge
-```
-
-## The package repository (`~/ark-repo`)
-
-A standalone directory, its own git repo, intentionally outside this project:
-
-```
-~/ark-repo                      →  github.com/Arthur4567321/ark-repo
-├── packages.json               # the index (fetched from GitHub raw)
-├── index.html                  # searchable web catalog (USE-flag chips)
-├── pkgs/
-│   └── <name>/PKGBUILD         # one Arch-style recipe per package
-└── extensions/                 # installable extensions (ark-forge, ark-emerge)
-```
-
-**Hosting is git-only** — no server anywhere. Both `ark` and `ark-forge`
-default to:
-
-```
-https://raw.githubusercontent.com/Arthur4567321/ark-repo/main/packages.json
-```
-
-Publishing package changes is just a push:
-
-```bash
-cd ~/ark-repo && git add -A && git commit -m "…" && git push
-```
-
-(`raw.githubusercontent.com` caches for ~5 minutes — fresh pushes may take a
-moment to appear.)
-
-For local development without pushing, serve a checkout and override:
-
-```bash
-python3 -m http.server 8000 --directory ~/ark-repo
-ARK_INDEX_URL=http://localhost:8000/packages.json ark forge hello
-```
+> Installation instructions are coming soon.
 
 ## Usage
 
-```bash
-ark install <package>   # install a package from the index (legacy path)
-ark list                # list installed packages
-ark update              # reinstall packages whose repo version is newer
-ark remove <package>    # remove an installed package and its files
-ark forge <package>     # 🔥 THE defining extension (see below)
-```
-
-Installed packages are recorded in `~/.ark/list.json` (the `~` is expanded to `$HOME` at runtime).
-
-## ark forge — the defining extension
-
-Every recipe-capable package in the repository ships an Arch-style **PKGBUILD**
-(`web/pkgs/<name>/PKGBUILD`). USE flags selected by the user change how the
-recipe builds. Every build is sandboxed and transactional.
+The basic Ark command is:
 
 ```bash
-ark forge hello                                  # build with your configured flags
-ark forge hello --flags minimal                  # one-shot flags
-ark forge hello-gentoo --flags color,fancy,quotes
-ark forge hello --show-flags                     # declared + effective flags
-ark forge ~/ark-repo/pkgs/hello                  # build from an explicit recipe dir
-ark forge hello --no-sandbox                     # escape hatch (loud + dangerous)
-ark forge hello --keep-staging                   # debugging aid
+ark <command>
 ```
 
-### Recipe lookup order
-
-1. **`~/.ark/pkgs/<name>/PKGBUILD`** — your personal overlay; wins over the
-   repo, perfect for hacking on a recipe without touching any git
-2. an explicit directory argument containing a `PKGBUILD`
-3. the recipe URL published in the index
-
-### Flag layering (most specific wins)
-
-1. `--flags a,b` on the command line
-2. `~/.ark/package.flags` — one line per package: `hello minimal`
-3. `~/.ark/arkrc` — global defaults: `FLAGS="minimal"`
-
-Unknown flags are warned about and ignored.
-
-### PKGBUILD recipe format
+For example:
 
 ```bash
-pkgname=hello
-pkgver=2                    # plain integer, ark's version scheme
-flags=(minimal)             # USE flags this recipe understands
-depends=(libfoo libbar)     # other ark packages, resolved recursively
-provides=(bin/hello)        # artifacts the build MUST produce (verified!)
-
-build() {
-    if has_flag minimal; then ... else ... fi   # flags bake in at BUILD time
-}
-package() {
-    install -Dm755 hello "$pkgdir/bin/hello"    # $pkgdir = staging payload
-}
+ark install <package>
+ark remove <package>
+ark update
 ```
 
-Phases (`prepare`, `build`, `package`) are optional and run with `$srcdir` /
-`$pkgdir` set, Arch-style. **Never call `has_flag` at runtime** — flags exist
-only during the build; bake the decision into the artifact.
-
-### Dependencies & meta-packages
-
-`depends=()` makes recipes composable into a distro. Forge resolves the full
-tree (cycle detection included), skips dependencies already installed,
-forges **dependencies first**, and if ANY package in the tree fails, every
-package installed during that run is rolled back — the unbreakable promise
-at distro scale. `--nodeps` skips resolution; `--flags` applies to the root
-package only (deps use their own `~/.ark/package.flags` / arkrc settings).
-
-The proof: `ark forge ark-distro` builds the entire ark distro (base tools +
-Hyprland desktop, ~40 packages) as ONE transaction:
-
-### The transaction (why ark can't leave you broken)
-
-1. recipe downloaded to a private staging dir (`~/.ark/staging/`)
-2. build runs in a sandbox: **bubblewrap** (no network, tmpfs root, staging is
-   the only writable path) → **unshare** user+mount ns fallback → **refuse**
-3. every entry in `provides` must exist in the payload, or nothing is installed
-4. atomic commit: old version quarantined, payload swapped in, `list.json`
-   rewritten via temp-file rename — a failure at any point restores the
-   previous state
-
-### The catalog: real distro software
-
-Most packages in the repo wrap **the real binaries your distro already
-ships** (`/usr/bin/rg`, `/usr/bin/nvim`, …) — the forge sandbox has no
-network by design, so ark builds on top of your distro instead of
-replacing it. Recipes verify the distro binary exists at build time and
-refuse cleanly (nothing installed) if it doesn't. USE flags bake real
-behavior into the wrapper:
-
-- `ark forge ripgrep --flags smart` → `rg --smart-case`
-- `ark forge fd --flags hidden,noignore` → `fd --hidden --no-ignore-vcs`
-- `ark forge eza --flags git,icons` → `eza --git --icons=auto`
-- `ark forge curl --flags retry` → `curl --retry 3`
-- `ark forge neovim --flags config` → ships a sane `init.vim` in the package
-- `ark forge zsh --flags config` → `ZDOTDIR` points into the package
-
-Catalog: ripgrep, fd, bat, eza, fzf, tree, curl, wget, neovim, vim, nano,
-micro, btop, zsh, starship, jq, unzip, duf, sd — plus the **Hyprland distro
-stack**: hyprland, hyprctl, hypridle, alacritty, kitty, nautilus, chromium,
-mpv, playerctl, pavucontrol, networkmanager, fuzzel, grim, slurp,
-wl-clipboard, pipewire, wireplumber, brightnessctl, powerprofilesctl, sddm,
-audio-session, session-hyprland — and the metas `desktop-hyprland`,
-`distro-base`, `ark-distro`.
-
-The **ark-forge extension itself** is installable from the repo's
-`extensions/` directory:
+Run:
 
 ```bash
-ark install ark-forge     # curls it from the index host into ~/.ark/extensions/
+ark --help
 ```
 
-(`ark install ark-forge` curls the binary straight from the repo's GitHub raw
-URL — works from any machine, no server running.)
+to see the commands available in your installation.
 
 ## Extensions
 
-Any executable named `ark-<name>` in `~/.ark/extensions/` becomes a subcommand: `ark <name> ...` gets dispatched to it with the remaining arguments. `ark-forge` (built from this repo, see above) is the flagship.
+Extensions are a fundamental part of Ark.
 
-**Legacy extension: `emerge`** — the first USE-flag experiment; operates at
-runtime instead of build time. Superseded by `ark forge`, kept for reference:
+An extension is simply an **executable program** that Ark can invoke. Because Ark communicates with extensions through their command-line arguments, an extension can be written in virtually any language.
+
+For example:
+
+```text
+ark
+├── install
+├── remove
+├── update
+└── my-extension
+```
+
+When the user runs:
 
 ```bash
-ark install emerge                      # installs the extension from this repo
-ark emerge install hello-gentoo +color +quotes
-ark emerge install super-cow           # auto-installs the 'hello' dependency
-ark emerge remove hello                # REFUSED: super-cow depends on it
-ark emerge remove hello --force        # allowed, goes to trash not /dev/null
-ark emerge rollback                    # undo the last operation
-ark emerge update -p                   # pretend dry-run, Gentoo style
-ark emerge list / world / search / info / backups
+ark my-extension foo --bar baz
 ```
 
-Safety features: dpkg-style lock (no concurrent runs), atomic database writes, a snapshot before every change (last 5 kept), removals moved to trash instead of deleted, automatic rollback if an install fails, and dependency-aware removal refusal.
+Ark resolves `my-extension` and executes the corresponding extension, passing the arguments through:
 
-USE flags are stored per package in `~/.ark/emerge/package.use/<name>`; packages opt into flags via a `use_flags` list and declare dependencies via `depends` in `packages.json`.
-
-## Package JSON schema
-
-```json
-{
-  "name": "hello",
-  "version": 2,
-  "recipe": "pkgs/hello/PKGBUILD",
-  "flags": ["minimal"],
-  "path": "~/.ark/packages/hello",
-  "installation_command": "ark forge hello"
-}
+```text
+foo --bar baz
 ```
 
-- `version` — compared numerically by `ark update`
-- `recipe` — PKGBUILD path (relative to the index URL) used by `ark forge`
-- `flags` — declared USE flags (shown as chips on the web page)
-- `path` — what `ark remove` deletes (`rm -rf`)
-- `installation_command` — run through `bash -c`; forged packages point at
-  `ark forge <name>` so even `ark update` goes through the sandbox
+The extension is responsible for interpreting those arguments and performing its functionality.
+
+### Any language
+
+Extensions are not tied to Rust.
+
+You can write an Ark extension in:
+
+* Rust
+* C / C++
+* Go
+* Python
+* JavaScript / TypeScript
+* Ruby
+* Java
+* Shell
+* Or any other language capable of producing an executable
+
+For example, a simple shell extension could be:
+
+```bash
+#!/bin/sh
+
+echo "Ark extension"
+echo "Arguments: $@"
+```
+
+The same extension could instead be implemented as a compiled Rust binary, Python executable, Go program, or anything else.
+
+### Simple interface
+
+Ark's extension interface is intentionally minimal.
+
+The core does not need to understand what an extension does. It only needs to:
+
+1. Identify the requested extension.
+2. Launch the extension.
+3. Pass the user's arguments to it.
+4. Return the extension's result to the user.
+
+This keeps the extension API language-independent and allows extensions to evolve independently of Ark.
+
+## CLI
+
+Ark uses [`clap`](https://docs.rs/clap) for its command-line interface.
+
+Clap handles Ark's built-in command definitions and provides the structure used to integrate extension commands into the CLI.
+
+The important distinction is that **Clap is part of Ark's CLI implementation, not a requirement for extensions**.
+
+An extension does not need to use Clap or even be written in Rust.
+
+## Architecture
+
+Ark consists of a small core surrounded by independently implemented extensions.
+
+```text
+                         ┌─────────────┐
+                         │     Ark     │
+                         │    (Rust)   │
+                         └──────┬──────┘
+                                │
+                    ┌───────────┴───────────┐
+                    │                       │
+              Core commands          Extension runner
+                    │                       │
+             ┌──────┴──────┐        ┌──────┴──────┐
+             │             │        │             │
+          install        remove   Extension A   Extension B
+                                      │             │
+                                   Python         Go
+```
+
+The core does not need to know the implementation language of an extension.
+
+```text
+User
+ │
+ │ ark example hello --verbose
+ ▼
+Ark
+ │
+ │ executes extension
+ │ arguments:
+ │   hello --verbose
+ ▼
+Extension
+ │
+ ▼
+Result
+```
+
+## Design Goals
+
+### Small
+
+Ark should provide a focused package-management core without accumulating functionality that can be implemented independently.
+
+### Extensible
+
+New functionality should be addable without modifying Ark itself.
+
+### Language-independent
+
+Extensions should not be tied to Rust or any specific runtime, framework, or SDK.
+
+### Simple
+
+The boundary between Ark and an extension should be as simple as possible: Ark executes a program and provides its arguments.
+
+### Independent
+
+Extensions can be developed, compiled, released, and maintained separately from Ark.
+
+## Development
+
+Clone the repository:
+
+```bash
+git clone <repository-url>
+cd ark
+```
+
+Build:
+
+```bash
+cargo build
+```
+
+Run:
+
+```bash
+cargo run -- --help
+```
+
+Run tests:
+
+```bash
+cargo test
+```
+
+Format:
+
+```bash
+cargo fmt
+```
+
+Run Clippy:
+
+```bash
+cargo clippy
+```
+
+## Contributing
+
+Contributions are welcome.
+
+Before submitting a pull request, run:
+
+```bash
+cargo fmt
+cargo clippy
+cargo test
+```
+
+For larger changes, open an issue to discuss the design first.
+
+## License
+
+Ark is licensed under the **GNU General Public License (GPL)**.
+
+See the `LICENSE` file for the full license text.
