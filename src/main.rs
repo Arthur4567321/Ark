@@ -107,7 +107,7 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
     let result = data
         .iter()
         .find(|item| item.name == package)
-        .ok_or_else(|| println!(format!("no package named '{package}' in the index")))?;
+        .ok_or_else(|| println!("{}",format!("no package named '{package}' in the index")))?;
 
     // install dependencies first (skipping ones already installed).
     // `for dep in &result.depends` is all the iteration you need — no
@@ -125,7 +125,8 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
             install_package(dependency.clone())?;
         }
     }
-    // .status() runs the command — a failing install must NOT be recorded
+    // .status() runs the command — a
+    failing install must NOT be recorded
     let install_status = Command::new("bash")
         .arg("-c")
         .arg(&result.installation_command)
@@ -173,6 +174,7 @@ fn install_package(package: String) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+        
 fn list_packages() {
     // a fresh machine has no list.json yet — that just means "nothing installed"
     let data: Vec<Package> = match fs::read_to_string(expand_tilde(LIST_PATH)) {
@@ -187,13 +189,13 @@ fn list_packages() {
 
 fn remove_package(package: String) -> Result<(), Box<dyn Error>> {
     let json_text = fs::read_to_string(expand_tilde(LIST_PATH))
-        .map_err(|_| println!(format!("nothing is installed (no {LIST_PATH})")))?;
+        .map_err(|_| format!("nothing is installed (no {LIST_PATH})"))?;
     let data: Vec<Package> = serde_json::from_str(&json_text)?;
 
     let result = data
         .iter()
         .find(|item| item.name == package)
-        .ok_or_else(|| println!(format!("'{package}' is not installed")))?;
+        .ok_or_else(|| println!("{}",format!("'{package}' is not installed")))?;
 
     // bash -c takes ONE command string; "rm" "-rf" path as separate args were ignored
     let remove_status = Command::new("bash")
