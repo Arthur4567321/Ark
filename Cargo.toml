@@ -3,14 +3,6 @@ name = "Ark"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "ark"
-path = "src/main.rs"
-
-[[bin]]
-name = "ark-forge"
-path = "src/bin/forge.rs"
-
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
